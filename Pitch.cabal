@@ -25,7 +25,7 @@ license:             MIT
 license-file:        LICENSE
 
 -- The package author(s).
-author:              Ben Weitzma
+author:              Ben Weitzman
 
 -- An email address to which users can send suggestions, bug reports, and 
 -- patches.
@@ -43,13 +43,13 @@ cabal-version:       >=1.8
 
 
 executable Pitch
+  hs-source-dirs:     src
   -- .hs or .lhs file containing the Main module.
-  main-is:            Pitch.hs
+  main-is:            Main.hs
   
   -- Modules included in this executable, other than Main.
-  other-modules:      Card
-                      Deck
+  other-modules:      Pitch.Card
+                      Pitch.Deck
   -- Other library packages from which modules are imported.
   build-depends:       base ==4.6.*,
                        random ==1.*
-  
