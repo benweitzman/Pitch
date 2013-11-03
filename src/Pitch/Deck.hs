@@ -1,10 +1,10 @@
 module Pitch.Deck (Deck
-            	  ,deckSize
-            	  ,newDeck
-               	  ,shuffleDeck
+                  ,deckSize
+                  ,newDeck
+                  ,shuffleDeck
                   ,mkDeck
-            	  ,deal
-            	  )
+                  ,deal
+                  )
        
 where       
   
