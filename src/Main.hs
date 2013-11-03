@@ -1,7 +1,10 @@
 import Pitch.Deck
+import Pitch.Game
 import System.Random
+import Control.Monad.State
+import Control.Monad
 
 main = do
   gen <- getStdGen
-  let (deck, g) = shuffleDeck gen newDeck
-  putStrLn . show . deal 5 $ deck
+  let gameState = mkGameState gen [Player (Human "Ben"), Player (Human "John"), Player (Human "Alex")]
+  runStateT playGame gameState

@@ -8,7 +8,7 @@ where
 import Control.Applicative  
 import Data.List  
 
-data Suit = Clubs | Spades | Hearts | Diamonds deriving (Eq, Read, Enum, Bounded)
+data Suit = Clubs | Spades | Hearts | Diamonds deriving (Eq, Read, Enum, Bounded, Ord)
 
 instance Show Suit where
   show Clubs    = "C"
@@ -43,6 +43,7 @@ instance Ord Rank where
   King <= _ = True
   Ace <= Ace = True
   Ace <= _ = False
+  _ <= _ = False
   
 instance Bounded Rank where
   minBound = Number 2

@@ -50,6 +50,9 @@ executable Pitch
   -- Modules included in this executable, other than Main.
   other-modules:      Pitch.Card
                       Pitch.Deck
+
   -- Other library packages from which modules are imported.
   build-depends:       base ==4.6.*,
-                       random ==1.*
+                       random ==1.*,
+                       mtl,
+                       transformers
