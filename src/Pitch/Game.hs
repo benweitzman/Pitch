@@ -17,6 +17,7 @@ import           Data.List
 import           Data.Ord
 import           Pitch.Card
 import           Pitch.Deck
+import           Pitch.Parser
 import           System.Random
 import           Text.Printf         (printf)
 
@@ -88,11 +89,16 @@ doBid (Player p, idx) = do (amount, suit) <- mkBid (p, idx)
 
 doPlay :: (RandomGen g) => (Player, Int) -> Game g ()
 doPlay (Player p, idx) = do card <- mkPlay (p, idx)
-                            g@Game {rounds=r@Round{tricks=t@Trick{played=played}:ts}:rs} <- get
+                            g@Game {rounds=r@Round{tricks=t@Trick{played=played}:ts,hands=hands}:rs} <- get
                             let newPlay = Play card idx
-                            put g{rounds=r{tricks=t{played=newPlay:played}:ts}:rs}
+                            put g{rounds=r{tricks=t{played=newPlay:played}:ts
+                                          ,hands=removeCard card hands
+                                          }:rs}
                             return ()
-
+  where removeCard c [] = []
+        removeCard c (h@Hand{cards=cs,ownerIdx=i}:hs) | i == idx = h{cards=delete c cs}:hs
+                                                      | otherwise = h:removeCard c hs
+    
 winner :: Suit -> [Play] -> Play
 winner _ _ = Play (Card Jack Clubs) 3
 
@@ -154,6 +160,14 @@ prompt s = liftIO $ do putStrLn s
                          [(x, "")] -> return x
                          _ -> do putStrLn $ "Couldn't parse input " ++ show string
                                  prompt s
+                                 
+promptp :: (MonadIO m) => (String -> Maybe a) -> String -> m a
+promptp parseFun s = liftIO $ do putStrLn s
+                                 string <- getLine
+                                 case parseFun string of
+                                   Just x -> return x
+                                   Nothing -> do putStrLn $ "Couldn't parse input " ++ show string
+                                                 promptp parseFun s
 
 validateOne :: (Read a, MonadIO m) => String -> (a -> Bool) -> String -> m a
 validateOne promptMessage predicate errorMessage =
@@ -170,6 +184,15 @@ validatePrompt promptMessage tests =
          Nothing -> return val
          Just (_, errorMessage) -> do liftIO $ putStrLn errorMessage
                                       validatePrompt promptMessage tests
+
+validatePromptp :: (MonadIO m) => (String -> Maybe a) -> String -> [(a -> Bool, String)] -> m a
+validatePromptp parseFun promptMessage tests =
+  do val <- promptp parseFun promptMessage
+     case find (\(p,_) -> not $ p val) tests of
+         Nothing -> return val
+         Just (_, errorMessage) -> do liftIO $ putStrLn errorMessage
+                                      validatePromptp parseFun promptMessage tests
+
 
 
 
@@ -204,8 +227,35 @@ instance PlayerLogic HumanPlayer where
                                 else return minBound
                         return (bid, suit)
 
-    mkPlay (p, idx) = do gs <- get
-                         return $ Card Ace Diamonds                        
+    mkPlay (p, idx) = do gs@Game{rounds=rounds@Round{trump=trump
+                                                    ,tricks=trick@Trick{played=played}:ts
+                                                    ,hands=hands                                                            
+                                                    }:rs
+                                ,players=players
+                                } <- get
+                         liftIO $ putStrLn (show p ++ ", it is your turn to play")
+                         if null played
+                            then liftIO $ putStrLn "Your lead"
+                            else let trickPlayers = map ((players !!) . playerIdx) played
+                                     first:rest = reverse $ zip played trickPlayers
+                                 in do liftIO $ putStrLn (show (snd first) ++ " led with " ++ show (card $ fst first))
+                                       forM_ rest (\(play@Play{card=card}, player) -> liftIO $ putStrLn (show player ++ " followed with " ++ show card))
+                         liftIO $ putStr "Your hand is "
+                         let hand = case find ((== idx) . ownerIdx) hands of
+                                      Just h -> cards h
+                                      Nothing -> error "This can't happen"
+                         liftIO $ print hand
+                         card <- validatePromptp parseCard "What card you do you want to play?" [(flip elem hand, "You don't have that card")
+                                                                                                ,(\c -> not (null ts) || not (null played) || suit c == trump
+                                                                                                 , "You must lead trump"
+                                                                                                 )  
+                                                                                                ,(\c -> suit c == trump
+                                                                                                        || suit c == suit (card (last played))
+                                                                                                        || not (suit (card (last played)) `elem` map suit hand)
+                                                                                                 , "You must play trump or follow suit"
+                                                                                                 )
+                                                                                                ]
+                         return card                       
 
 
 data Player = forall p. (PlayerLogic p) => Player {getLogic :: p}
