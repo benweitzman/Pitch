@@ -28,7 +28,7 @@ shuffleDeck generator deck = let (idx, generator') = randomR (0, length deck -1)
                                  (x, xs) = removeAt idx deck
                                  (xs', generator'') = shuffleDeck generator' xs
                              in (x:xs', generator'')
-  where removeAt pos deck = (deck !! pos, take pos deck ++ drop (pos + 1) deck)
+  where removeAt n xs = (xs !! n, take n xs ++ drop (n + 1) xs)
 
 mkDeck :: RandomGen g => g -> (Deck, g)
 mkDeck generator = shuffleDeck generator newDeck

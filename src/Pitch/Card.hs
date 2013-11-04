@@ -6,7 +6,8 @@ module Pitch.Card (Suit (..)
 where
   
 import Control.Applicative  
-import Data.List  
+import Data.List
+import Data.Maybe
 
 data Suit = Clubs | Spades | Hearts | Diamonds deriving (Eq, Read, Enum, Bounded, Ord)
 
@@ -43,12 +44,13 @@ instance Ord Rank where
   King <= _ = True
   Ace <= Ace = True
   Ace <= _ = False
-  _ <= _ = False
+  Number _ <= _ = True
   
 instance Bounded Rank where
   minBound = Number 2
   maxBound = Ace
   
+cardOrder :: [Rank]
 cardOrder = (Number <$> [2..10]) ++ [Jack, Queen, King, Ace]
 
 instance Enum Rank where
@@ -67,9 +69,7 @@ instance Enum Rank where
   pred Ace = King
     
   toEnum n = cardOrder !! n
-  fromEnum r = case elemIndex r cardOrder of
-                 Nothing -> error "no valid rank for index"
-                 Just n -> n
+  fromEnum r = fromMaybe (error "no valid rank for index") (elemIndex r cardOrder)
   
   enumFrom x = enumFromTo x maxBound
   enumFromThen x y = enumFromThenTo x y bound
@@ -78,13 +78,12 @@ instance Enum Rank where
                               
 data Card = Card { rank :: Rank, suit :: Suit} deriving (Eq, Bounded)                               
 
+cards :: [Card]
 cards = [Card r s | s <- [minBound .. ], r <- [minBound .. ]]
 
 instance Enum Card where
   toEnum n = cards !! n
-  fromEnum c = case elemIndex c cards of
-                 Nothing -> error "no valid card for index"
-                 Just n -> n
+  fromEnum c = fromMaybe (error "no valid card for index") (elemIndex c cards)
                  
   enumFrom x = enumFromTo x maxBound
 

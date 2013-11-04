@@ -1,4 +1,5 @@
 import Pitch.Deck
+import Pitch.Card
 import Pitch.Game
 import System.Random
 import Control.Monad.State

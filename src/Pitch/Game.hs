@@ -11,69 +11,72 @@ module Pitch.Game (RoundState
 
 where
 
-import Pitch.Deck
-import Pitch.Card
-import System.Random
-import Control.Monad
-import Control.Monad.State
-import Data.List
-import Data.Ord
-import Control.Monad.IO.Class (liftIO, MonadIO)
-import Text.Printf (printf)
+import           Control.Monad
+import           Control.Monad.State
+import           Data.List
+import           Data.Ord
+import           Pitch.Card
+import           Pitch.Deck
+import           System.Random
+import           Text.Printf         (printf)
 
 
 data Hand = Hand {cards :: [Card], ownerIdx :: Int} deriving (Show, Eq)
 data Bid = Bid {amount :: Int, bidSuit :: Suit, bidderIdx :: Int} deriving (Show, Eq)
-data Trick = Trick {played :: [Card], winnerIdx :: Int} deriving (Show, Eq)
+data Play = Play {card :: Card, playerIdx :: Int} deriving (Show, Eq)
+data Trick = Trick {played :: [Play], winnerIdx :: Int} deriving (Show, Eq)
 
-data RoundState = Round { deck :: Deck
-                        , hands :: [Hand]
-                        , bids :: [Bid]
-                        , trump :: Suit
+newTrick :: Trick
+newTrick = Trick [] (-1)
+
+data RoundState = Round { deck   :: Deck
+                        , hands  :: [Hand]
+                        , bids   :: [Bid]
+                        , trump  :: Suit
                         , tricks :: [Trick]
                         } deriving (Show)
 
 mkRoundState :: RandomGen g => g -> Int -> (RoundState, g)
-mkRoundState generator players = (Round {deck = deck'
-                                        ,hands = zipWith Hand hands [0..]
-                                        ,bids = []
-                                        ,trump = minBound
-                                        ,tricks = []
-                                        }
-                                 ,g
-                                 )       
-    where (hands, deck') = runState (forM [0..players-1] (\x -> deal 6)) deck
-          (deck, g) = mkDeck generator
+mkRoundState g ps = (Round {deck = deck'
+                           ,hands = zipWith Hand hs [0..]
+                           ,bids = []
+                           ,trump = minBound
+                           ,tricks = []
+                           }
+                    ,g'
+                    )
+    where (hs, deck') = runState (forM [0..ps-1] (const $ deal 6)) d
+          (d, g') = mkDeck g
 
 wonBid :: Int -> RoundState -> Bool
 wonBid n rs = bidderIdx (maximumBy (comparing amount) (bids rs)) == n
 
-data (RandomGen g) => GameState g = Game { players :: [Player]
-                                         , scores :: [Int]
-                                         , rounds :: [RoundState]
-                                         , dealers :: [(Player, Int)]
+data (RandomGen g) => GameState g = Game { players   :: [Player]
+                                         , scores    :: [Int]
+                                         , rounds    :: [RoundState]
+                                         , dealers   :: [(Player, Int)]
                                          , generator :: g
                                          } deriving (Show)
 
 mkGameState :: RandomGen g => g -> [Player] -> GameState g
-mkGameState generator players = Game {players = players
-                                     ,scores = map (const 0) players
-                                     ,generator = generator
+mkGameState g ps = Game {players = ps
+                                     ,scores = map (const 0) ps
+                                     ,generator = g
                                      ,rounds = []
-                                     ,dealers = cycle $ zip players [0..]
-                                     } 
+                                     ,dealers = cycle $ zip ps [0..]
+                                     }
 
 lastRound :: RandomGen g => GameState g -> RoundState
 lastRound = head . rounds
 
-type Game g = StateT (GameState g) IO
+type Game g =  StateT (GameState g) IO
 
 checkForWinner :: RandomGen g => Game g (Maybe (Player, Int))
 checkForWinner = state (\x -> (check x, x))
-    where check gs = if (any (== 11) (scores gs))
+    where check gs = if elem 11 $ scores gs
                      then let scoresAndIndexes = filter (\x -> fst x == 11) $ zip (scores gs) [1..]
                           in do (winnerIdx, score) <- find (\(widx, _) -> wonBid widx (lastRound gs)) scoresAndIndexes
-                                return (players gs !! winnerIdx, score) 
+                                return (players gs !! winnerIdx, score)
                      else Nothing
 
 doBid :: (RandomGen g) => (Player, Int) -> Game g ()
@@ -82,6 +85,26 @@ doBid (Player p, idx) = do (amount, suit) <- mkBid (p, idx)
                            let newBid = Bid amount suit idx
                            put g{rounds=r{bids=newBid:bs}:rs}
                            return ()
+
+doPlay :: (RandomGen g) => (Player, Int) -> Game g ()
+doPlay (Player p, idx) = do card <- mkPlay (p, idx)
+                            g@Game {rounds=r@Round{tricks=t@Trick{played=played}:ts}:rs} <- get
+                            let newPlay = Play card idx
+                            put g{rounds=r{tricks=t{played=newPlay:played}:ts}:rs}
+                            return ()
+
+winner :: Suit -> [Play] -> Play
+winner _ _ = Play (Card Jack Clubs) 3
+
+playTrick :: RandomGen g => Game g ()
+playTrick = do g@Game {rounds=r@Round{bids=bids, tricks=ts}:rs, dealers=ds, players=ps} <- get
+               let startingPlayerIdx = if null $ tricks r
+                                       then bidderIdx $ maximumBy (comparing amount) bids
+                                       else winnerIdx $ head ts
+               put g{rounds=r{tricks=newTrick:ts}:rs}
+               let playOrder = take 4 $ dropWhile ((/= startingPlayerIdx) . snd) ds
+               forM_ playOrder doPlay                              
+               return ()
 
 playRound :: RandomGen g => Game g ()
 playRound = do  liftIO $ putStrLn "playing a round"
@@ -98,18 +121,18 @@ playRound = do  liftIO $ putStrLn "playing a round"
                 put g{dealers=ds, rounds=r{trump=bidSuit maxBid}:rs}
                 let bidder = ps !! bidderIdx maxBid
                 liftIO $ printf "Trump is %s, %s starts\n" (show $ bidSuit maxBid) (show bidder)
-                
+                forM_ [1 .. 6] (const playTrick)
                 return ()
 
 playGame :: (RandomGen g) => Game g (Player, Int)
 playGame = do playRound
               maybeWinner <- checkForWinner
-              let winnerSt = case maybeWinner of 
+              let winnerSt = case maybeWinner of
                                 Nothing -> playGame
                                 Just x -> return x
-              (winP, score) <- winnerSt                           
+              (winP, score) <- winnerSt
               liftIO $ putStrLn "we have a winner"
-              liftIO $ putStrLn (show score)
+              liftIO $ print score
               winnerSt
 
 class (Show p, Eq p) => PlayerLogic p where
@@ -133,9 +156,9 @@ prompt s = liftIO $ do putStrLn s
                                  prompt s
 
 validateOne :: (Read a, MonadIO m) => String -> (a -> Bool) -> String -> m a
-validateOne promptMessage predicate errorMessage = 
+validateOne promptMessage predicate errorMessage =
     do val <- prompt promptMessage
-       if predicate val 
+       if predicate val
            then return val
            else do liftIO $ putStrLn errorMessage
                    validateOne promptMessage predicate errorMessage
@@ -160,13 +183,13 @@ instance PlayerLogic HumanPlayer where
                            then liftIO $ putStrLn "Nobody has bid yet"
                            else let maxBid = maximumBy (comparing amount) $ bids round
                                     bidder = players gs !! bidderIdx maxBid
-                                in liftIO $ putStrLn ((show bidder) ++ " has bid " ++ show (amount maxBid))
+                                in liftIO $ putStrLn (show bidder ++ " has bid " ++ show (amount maxBid))
                         liftIO $ putStr "Your hand is "
                         let hand = case find ((== idx) . ownerIdx) (hands round) of
                                      Just h -> cards h
                                      Nothing -> error "This can't happen"
-                        liftIO $ putStrLn (show hand)
-                        bid <- validatePrompt "What is your bid?" [((flip elem) [0, 2, 3, 4], "A valid bid is 0 (pass), 2, 3, or 4")
+                        liftIO $ print hand
+                        bid <- validatePrompt "What is your bid?" [(flip elem [0, 2, 3, 4], "A valid bid is 0 (pass), 2, 3, or 4")
                                                                   ,(\x -> x == 0 || all (<x) (map amount $ bids round)
                                                                    , "You need to bid more than " ++ show (maximum . map amount $ bids round)
                                                                    )
@@ -176,17 +199,19 @@ instance PlayerLogic HumanPlayer where
                                                                    , "Since you are the last player to bid and everyone else has passed, you must bid at least 2"
                                                                    )
                                                                   ]
-                        suit <- if bid /= 0 
-                                then do s <- prompt "What suit?"
-                                        return s
+                        suit <- if bid /= 0
+                                then prompt "What suit?"
                                 else return minBound
                         return (bid, suit)
+
+    mkPlay (p, idx) = do gs <- get
+                         return $ Card Ace Diamonds                        
 
 
 data Player = forall p. (PlayerLogic p) => Player {getLogic :: p}
 
 instance Show Player where
-    show (Player p) = show p 
+    show (Player p) = show p
 
 
 
