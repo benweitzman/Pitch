@@ -58,4 +58,6 @@ executable Pitch
                        mtl,
                        transformers,
                        text,
-                       attoparsec
+                       attoparsec,
+                       network,
+                       time
