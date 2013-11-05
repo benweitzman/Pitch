@@ -5,7 +5,7 @@ module Pitch.Parser(parseCard)
 where
   
 import Data.Attoparsec.Text
-import Data.Text
+import Data.Text (pack)
 import Control.Applicative
 import Pitch.Card
 
@@ -20,36 +20,37 @@ suitParser = (string "Clubs" >> return Clubs)
          <|> (char 'C' >> return Clubs) 
 
 rankParser :: Parser Rank
-rankParser = (char '2' >> return (Number 2))
-             <|> (char '3' >> return (Number 3))
-             <|> (char '4' >> return (Number 4))
-             <|> (char '5' >> return (Number 5))
-             <|> (char '6' >> return (Number 6))
-             <|> (char '7' >> return (Number 7))
-             <|> (char '8' >> return (Number 8))
-             <|> (char '9' >> return (Number 9))
-             <|> (string "10" >> return (Number 10))
-             <|> (string "Ten" >> return (Number 10))
-             <|> (string "Jack" >> return Jack)
-             <|> (string "Queen" >> return Queen)
-             <|> (string "King" >> return King)
-             <|> (string "Ace" >> return Ace)
-             <|> (char 'T' >> return (Number 10))
-             <|> (char 'J' >> return Jack)
-             <|> (char 'Q' >> return Queen)
-             <|> (char 'K' >> return King)
-             <|> (char 'A' >> return Ace)
-             
+rankParser = foldr1 (<|>) $ map (\(pattern, value) -> string pattern >> return value)
+             [("2", Number 2)
+             ,("3", Number 3)
+             ,("4", Number 4)
+             ,("5", Number 5)
+             ,("6", Number 6)
+             ,("7", Number 7)
+             ,("8", Number 8)
+             ,("9", Number 9)
+             ,("10", Number 10)
+             ,("Ten", Number 10)
+             ,("Jack", Jack)
+             ,("Queen", Queen)
+             ,("King", King)
+             ,("Ace", Ace)
+             ,("T", Number 10)
+             ,("J", Jack)
+             ,("Q", Queen)
+             ,("K", King)
+             ,("A", Ace)
+             ]
+
 cardParser :: Parser Card
 cardParser = (do rank <- rankParser
-                 suit <- suitParser
-                 endOfInput
-                 return $ Card rank suit)
+                 parseWithRank rank)
          <|> (do rank <- rankParser
                  string " of "
-                 suit <- suitParser
-                 endOfInput
-                 return $ Card rank suit)
+                 parseWithRank rank)
+    where parseWithRank rank = do suit <- suitParser
+                                  endOfInput
+                                  return $ Card rank suit         
   
 parseCard :: String -> Maybe Card
 parseCard s = case parseOnly cardParser (pack s) of

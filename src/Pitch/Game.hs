@@ -245,17 +245,16 @@ instance PlayerLogic HumanPlayer where
                                       Just h -> cards h
                                       Nothing -> error "This can't happen"
                          liftIO $ print hand
-                         card <- validatePromptp parseCard "What card you do you want to play?" [(flip elem hand, "You don't have that card")
-                                                                                                ,(\c -> not (null ts) || not (null played) || suit c == trump
-                                                                                                 , "You must lead trump"
-                                                                                                 )  
-                                                                                                ,(\c -> suit c == trump
-                                                                                                        || suit c == suit (card (last played))
-                                                                                                        || not (suit (card (last played)) `elem` map suit hand)
-                                                                                                 , "You must play trump or follow suit"
-                                                                                                 )
-                                                                                                ]
-                         return card                       
+                         validatePromptp parseCard "What card you do you want to play?" [(flip elem hand, "You don't have that card")
+                                                                                        ,(\c -> not (null ts) || not (null played) || suit c == trump
+                                                                                         , "You must lead trump"
+                                                                                         )  
+                                                                                        ,(\c -> suit c == trump
+                                                                                                || suit c == suit (card (last played))
+                                                                                                || notElem (suit (card (last played))) (map suit hand)
+                                                                                         , "You must play trump or follow suit"
+                                                                                         )
+                                                                                        ]                      
 
 
 data Player = forall p. (PlayerLogic p) => Player {getLogic :: p}
