@@ -3,6 +3,7 @@ module Pitch.Network (runServer)
 where       
   
 import Control.Monad  
+import Control.Exception
 import Data.Maybe
 import Data.Char
 import Data.List
@@ -58,10 +59,17 @@ handleAccept handle hostname = do
   respond request handle
   return ()
                                              
+bindToPort :: PortNumber -> IO (Socket, PortNumber)
+bindToPort min = do result <- try (listenOn $ PortNumber min) :: IO (Either SomeException Socket)
+                    case result of 
+                      Left _ -> bindToPort (min + 1)
+                      Right s -> return (s, min)
+                                                              
+
 runServer :: IO ()    
 runServer = withSocketsDo $ do
-  sock <- listenOn (PortNumber 9000)
-  putStrLn "Listening on port 9000"
+  (sock, port) <- bindToPort 9000
+  putStrLn $ "Listening on port " ++ show port
   forever $ do (handle, hostname, port) <- accept sock
                handleAccept handle hostname
                hClose handle
