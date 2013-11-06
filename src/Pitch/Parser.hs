@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Pitch.Parser(parseCard)
+module Pitch.Parser(parseCard
+                   ,parseSuit
+                   )
        
 where
   
@@ -57,3 +59,7 @@ parseCard s = case parseOnly cardParser (pack s) of
                 Left _-> Nothing
                 Right c -> Just c
                    
+parseSuit :: String -> Maybe Suit
+parseSuit s = case parseOnly suitParser (pack s) of
+                Left _ -> Nothing
+                Right x -> Just x

@@ -11,10 +11,15 @@ import Data.Char
 import Data.List
 import System.IO
 import Network
-import Data.Time.LocalTime
- 
+import Data.Aeson
+import qualified Data.ByteString.Lazy.Char8 as BS
+
 data RequestType = GET | POST deriving (Show)
 data Request = Request { rtype :: RequestType, path :: String, options :: [(String,String)] }
+
+getData :: Request -> String
+getData Request{options=os} = fromMaybe "" $ lookup "Data" os
+
 data Response = Response { version :: String, statuscode :: Int }
  
 instance Show Request where
@@ -31,13 +36,12 @@ fromString t = case t of
   "GET" -> GET
   "POST" -> POST
 
-respond :: Request -> Handle -> IO ()
-respond request handle = do
+respond :: Request -> String -> Handle -> IO ()
+respond request response handle = do
   print request
-  let response = Response {version = "HTTP/1.1", statuscode = 200}
-  hPutStr handle $ show response
-  time <- getZonedTime
-  hPutStr handle $ "Haskell says HELLO.\nThe time is currently " ++ show time ++ "\n\n\nHere is some info from your session:\n" ++ show request
+  let responseHeader = Response {version = "HTTP/1.1", statuscode = 200}
+  hPutStr handle $ show responseHeader
+  hPutStr handle response
     
 --- This should really validate input or something. Separate validator? Or as-we-go?
 parseRequestHelper :: ([String], [(String,String)]) -> [(String,String)]
@@ -52,14 +56,13 @@ parseRequest :: [String] -> Request
 parseRequest lns = case words (head lns) of
   [t,p,_] -> Request {rtype=fromString t, path=p, options=parseRequestHelper (tail lns, [])}
 
-handleAccept :: Handle -> String -> IO String
+handleAccept :: Handle -> String -> IO Request
 handleAccept handle hostname = do 
   putStrLn $ "Handling request from " ++ hostname
   response <- hGetContents handle
   let request = parseRequest . lines $ response
-  respond request handle
-  print (options request)
-  return (fromJust $ lookup "Data" (options request))
+  --  respond request handle
+  return request
                                              
 bindToPort :: PortNumber -> IO (Socket, PortNumber)
 bindToPort min = do result <- try (listenOn $ PortNumber min) :: IO (Either SomeException Socket)
@@ -67,12 +70,23 @@ bindToPort min = do result <- try (listenOn $ PortNumber min) :: IO (Either Some
                       Left _ -> bindToPort (min + 1)
                       Right s -> return (s, min)
                                                             
+handleGetRequest :: ToJSON a => Request -> Chan a -> IO String
+handleGetRequest r readChannel = do responseData <- readChan readChannel -- Get the response data from the channel. Where does this data come from?
+                                    return . BS.unpack $ encode responseData
+                                    
 
-runServer :: Chan String -> IO ()    
-runServer ch = withSocketsDo $ do
+handlePostRequest :: ToJSON a => Request -> Chan a -> IO String
+handlePostRequest r readChannel = return "Thanks for your post request!"
+
+runServer :: ToJSON a => (Chan String, Chan a) -> IO ()    
+runServer (wch, rch) = withSocketsDo $ do
   (sock, port) <- bindToPort 9000
   putStrLn $ "Listening on port " ++ show port
   forever $ do (handle, hostname, port) <- accept sock
-               dataString <- handleAccept handle hostname
-               writeChan ch dataString
+               request <- handleAccept handle hostname
+               response <- case rtype request of 
+                 GET -> handleGetRequest request rch
+                 POST -> do writeChan wch $ getData request
+                            handlePostRequest request rch
+               respond request response handle
                hClose handle
