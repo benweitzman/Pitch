@@ -1,8 +1,7 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, FlexibleInstances #-}
 
 module Pitch.Players (NetworkPlayer (..)
                      ,mkNetworkPlayer
-                     ,BidResponse (..)
                      )
 
 where
@@ -13,7 +12,6 @@ import Pitch.Parser
 import Pitch.Card
 import Control.Concurrent
 import Control.Concurrent.Chan
-import Data.Aeson.Parser
 import Data.Aeson
 import Control.Applicative
 import Control.Monad
@@ -36,12 +34,11 @@ mkNetworkPlayer n = do channel <- newChan
 instance Show NetworkPlayer where
     show NetworkPlayer {name = n} = n
 
-data BidResponse = BidResponse { amount :: Int
-                               , suit :: String
-                               } deriving (Show)
+buildBid :: String -> String -> (Int, Suit)
+buildBid _ _ = (2, Clubs)
 
-instance FromJSON BidResponse where
-    parseJSON (Object v) = BidResponse <$>
+instance FromJSON (Int, Suit) where
+    parseJSON (Object v) = buildBid <$>
                             v .: "amount" <*>
                             v .: "suit"
      -- A non-Object value is of the wrong type, so fail.
@@ -50,12 +47,11 @@ instance FromJSON BidResponse where
 instance PlayerLogic NetworkPlayer where
     mkBid p@(NetworkPlayer {readChannel = channel}, idx) gs = 
         do string <- readChan channel
-           let maybeBid = decode (pack string) :: Maybe BidResponse
-           (amount, suitString) <- case maybeBid of
-                                        Just x -> return (amount x, Pitch.Players.suit x)
-                                        Nothing -> do (f, s) <- mkBid p gs
-                                                      return (f, show s)
-           return (0, Hearts)
+           let maybeBid = decode (pack string) :: Maybe (Int, Suit)
+           bid <- case maybeBid of
+                    Just x -> return x
+                    Nothing -> mkBid p gs
+           return bid
 
     mkPlay = error "Not implemented"
 
