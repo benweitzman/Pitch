@@ -52,6 +52,8 @@ executable Pitch
                       Pitch.Deck
                       Pitch.Game
                       Pitch.Parser
+                      Pitch.Utils
+                      Pitch.Network
   -- Other library packages from which modules are imported.
   build-depends:       base ==4.6.*,
                        random ==1.*,
@@ -60,4 +62,6 @@ executable Pitch
                        text,
                        attoparsec,
                        network,
-                       time
+                       time,
+                       aeson,
+                       bytestring

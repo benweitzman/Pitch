@@ -4,6 +4,8 @@ where
   
 import Control.Monad  
 import Control.Exception
+import Control.Concurrent.Chan
+import Control.Concurrent
 import Data.Maybe
 import Data.Char
 import Data.List
@@ -44,32 +46,33 @@ parseRequestHelper (l:rest, accum)
         | length (words l) < 2 = accum ++ [("Data", take contentLength $ concat rest)]
         | otherwise = parseRequestHelper(rest, accum ++ [(init . head $ words l, unwords . tail . words $ l)] )
   where contentLength = read contentLengthString
-        (_, contentLengthString) = fromJust $ find ((== "Content-Length") . fst) accum
+        (_, contentLengthString) = fromMaybe ("Content-Length", "0") $ find ((== "Content-Length") . fst) accum
                       
 parseRequest :: [String] -> Request
 parseRequest lns = case words (head lns) of
   [t,p,_] -> Request {rtype=fromString t, path=p, options=parseRequestHelper (tail lns, [])}
 
-handleAccept :: Handle -> String -> IO ()
+handleAccept :: Handle -> String -> IO String
 handleAccept handle hostname = do 
   putStrLn $ "Handling request from " ++ hostname
-  response <- (hGetContents handle)
+  response <- hGetContents handle
   let request = parseRequest . lines $ response
-  
   respond request handle
-  return ()
+  print (options request)
+  return (fromJust $ lookup "Data" (options request))
                                              
 bindToPort :: PortNumber -> IO (Socket, PortNumber)
 bindToPort min = do result <- try (listenOn $ PortNumber min) :: IO (Either SomeException Socket)
                     case result of 
                       Left _ -> bindToPort (min + 1)
                       Right s -> return (s, min)
-                                                              
+                                                            
 
-runServer :: IO ()    
-runServer = withSocketsDo $ do
+runServer :: Chan String -> IO ()    
+runServer ch = withSocketsDo $ do
   (sock, port) <- bindToPort 9000
   putStrLn $ "Listening on port " ++ show port
   forever $ do (handle, hostname, port) <- accept sock
-               handleAccept handle hostname
+               dataString <- handleAccept handle hostname
+               writeChan ch dataString
                hClose handle
