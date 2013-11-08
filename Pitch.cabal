@@ -42,18 +42,13 @@ build-type:          Simple
 cabal-version:       >=1.8
 
 
-executable Pitch
+executable pitch
   hs-source-dirs:     src
   -- .hs or .lhs file containing the Main module.
-  main-is:            Main.hs
+  main-is:            Pitch.hs
   
   -- Modules included in this executable, other than Main.
-  other-modules:      Pitch.Card
-                      Pitch.Deck
-                      Pitch.Game
-                      Pitch.Parser
-                      Pitch.Utils
-                      Pitch.Network
+  other-modules:      
   -- Other library packages from which modules are imported.
   build-depends:       base ==4.6.*,
                        random ==1.*,
@@ -64,4 +59,23 @@ executable Pitch
                        network,
                        time,
                        aeson,
-                       bytestring
+                       bytestring,
+                       containers,
+                       unordered-containers
+
+executable pitchc 
+  hs-source-dirs:      src
+  main-is:             Pitchc.hs
+  build-depends:       base ==4.6.*,
+                       random ==1.*,
+                       mtl,
+                       HTTP,
+                       aeson, 
+                       text,
+                       attoparsec,
+                       network,
+                       bytestring,
+                       transformers,
+                       containers,
+                       unordered-containers
+                       

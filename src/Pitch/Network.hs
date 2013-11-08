@@ -41,7 +41,7 @@ fromString t = case t of
 
 respond :: Request -> String -> Handle -> IO ()
 respond request response handle = do
-  print request
+  -- print request
   let responseHeader = Response {version = "HTTP/1.1", statuscode = 200}
   hPutStr handle $ show responseHeader
   hPutStr handle response
@@ -61,10 +61,10 @@ parseRequest lns = case words (head lns) of
 
 handleAccept :: Handle -> String -> IO Request
 handleAccept handle hostname = do 
-  putStrLn $ "Handling request from " ++ hostname
+  -- putStrLn $ "Handling request from " ++ hostname
   response <- hGetContents handle
   let request = parseRequest . lines $ response
-  --  respond request handle
+  -- respond request handle
   return request
                                              
 bindToPort :: PortNumber -> IO (Socket, PortNumber)
@@ -74,9 +74,11 @@ bindToPort min = do result <- try (listenOn $ PortNumber min) :: IO (Either Some
                       Right s -> return (s, min)
                                                             
 handleGetRequest :: (ToJSON a, ToJSON b, Monoid a) => Request -> MVar (Writer a b) -> IO String
-handleGetRequest r state = do responseData <- takeMVar state -- Get the response data from the channel. Where does this data come from?
-                              putMVar state (mapWriter (\(s, _) -> (s, mempty)) responseData)
-                              return . BS.unpack $ encode responseData
+handleGetRequest r state = do responseData <- tryTakeMVar state
+                              case responseData of 
+                                Just r -> do putMVar state (mapWriter (\(s, _) -> (s, mempty)) r)
+                                             return . BS.unpack $ encode responseData
+                                nr  -> return . BS.unpack $ encode nr
                                     
 
 handlePostRequest :: ToJSON a => Request -> Chan a -> IO String
