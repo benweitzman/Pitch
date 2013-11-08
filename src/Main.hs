@@ -13,7 +13,8 @@ import Network
 
 main = do
   gen <- getStdGen
-  netPlayer <- mkNetworkPlayer "net"
-  let gameState = mkGameState gen [Player (Human "Ben"), Player (Human "John"), Player (Human "Alex"), Player netPlayer]
+  netPlayer1 <- mkNetworkPlayer "net1"
+  netPlayer2 <- mkNetworkPlayer "net2"
+  let gameState = mkGameState gen [Player netPlayer1, Player (Human "John"), Player (Human "Alex"), Player netPlayer2]
   runStateT playGame gameState
   

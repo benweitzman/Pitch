@@ -2,6 +2,7 @@
 
 module Pitch.Parser(parseCard
                    ,parseSuit
+                   ,parseInt
                    )
        
 where
@@ -61,5 +62,10 @@ parseCard s = case parseOnly cardParser (pack s) of
                    
 parseSuit :: String -> Maybe Suit
 parseSuit s = case parseOnly suitParser (pack s) of
+                Left _ -> Nothing
+                Right x -> Just x
+
+parseInt :: String -> Maybe Int
+parseInt s = case parseOnly decimal (pack s) of
                 Left _ -> Nothing
                 Right x -> Just x

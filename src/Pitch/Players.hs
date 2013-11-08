@@ -15,8 +15,9 @@ import Control.Concurrent
 import Control.Concurrent.Chan
 import Control.Applicative
 import Control.Monad
+import Control.Monad.Writer
 import Control.Monad.IO.Class
-import Data.Aeson
+import Data.Aeson (ToJSON, toJSON, FromJSON, fromJSON, encode, decode, Value (..), object, (.:), (.=), parseJSON, (.:?))
 import Data.Maybe
 import Data.List
 import Data.Ord
@@ -24,15 +25,34 @@ import Data.Monoid
 import Data.ByteString.Lazy.Char8 (pack)
 import qualified Data.Text as T
 
+data Status = Success String | Failure String
+
+instance ToJSON Status where
+  toJSON (Success m) = object ["code" .= toJSON (20 :: Int), "message" .= toJSON m]
+  toJSON (Failure m) = object ["code" .= toJSON (50 :: Int), "message" .= toJSON m]
+
+
 data NetworkPlayer = NetworkPlayer {readChannel :: Chan String
-                                   ,writeChannel :: Chan (GameState, [Card])
+                                   ,writeChannel :: Chan (Status, GameState, [Card])
+                                   ,state :: MVar (Writer [String] (GameState, [Card]))
                                    ,thread :: ThreadId
                                    ,name :: String
                                    }
 
+instance ToJSON (Status, GameState, [Card]) where
+  toJSON (status, gs, hand) = object ["status" .= toJSON status
+                                     ,"gamestate" .= toJSON gs
+                                     ,"hand" .= toJSON hand
+                                     ]
+
+instance ToJSON (GameState, [Card]) where
+  toJSON (gs, hand) = object ["gamestate" .= toJSON gs
+                             ,"hand" .= toJSON hand
+                             ]
+
 instance ToJSON Card where
   toJSON (Card rank suit) = object ["rank" .= toJSON rank, "suit" .= toJSON suit]
-  
+
 instance ToJSON Suit where  
   toJSON suit = String . T.pack $ show suit
   
@@ -69,9 +89,11 @@ instance ToJSON Play where
 mkNetworkPlayer :: String -> IO NetworkPlayer
 mkNetworkPlayer n = do rchannel <- newChan
                        wchannel <- newChan
-                       threadId <- forkIO $ runServer (rchannel, wchannel)
+                       state <- newEmptyMVar
+                       threadId <- forkIO $ runServer (rchannel, wchannel, state)
                        return NetworkPlayer {readChannel = rchannel
                                             ,writeChannel = wchannel
+                                            ,state = state
                                             ,thread = threadId
                                             ,name = n
                                             }
@@ -79,17 +101,18 @@ mkNetworkPlayer n = do rchannel <- newChan
 instance Show NetworkPlayer where
     show NetworkPlayer {name = n} = n
 
-buildBid :: Int -> String -> Maybe (Int, Suit)
-buildBid i suitString = do s <- parseSuit suitString
-                           return (i, s)
+buildBid :: Int -> Maybe String -> Maybe (Int, Maybe Suit)
+buildBid i (Just suitString) = do s <- parseSuit suitString
+                                  return (i, Just s)
+buildBid i Nothing = Just (i, Nothing)
                            
 buildPlay :: String -> Maybe Card                           
 buildPlay = parseCard
 
-instance FromJSON (Int, Suit) where
+instance FromJSON (Int, Maybe Suit) where
     parseJSON (Object v) = do b <- buildBid <$>
                                     v .: "amount" <*>
-                                    v .: "suit"
+                                    v .:? "suit"
                               case b of
                                 Nothing -> mzero
                                 Just x -> return x                              
@@ -104,12 +127,19 @@ instance FromJSON Card where
                               Just x -> return x
 
 instance PlayerLogic NetworkPlayer where
-    mkBid p@(NetworkPlayer {readChannel = channel}, idx) gs hand = 
-        do string <- readChan channel
-           let maybeBid = decode (pack string) :: Maybe (Int, Suit)
-           case maybeBid of
-             Just x -> return x
-             Nothing -> mkBid p gs hand
+    mkBid p@(NetworkPlayer {readChannel = rchannel, writeChannel = wchannel}, idx) gs hand = 
+        do string <- readChan rchannel
+           let maybeBid = decode (pack string) :: Maybe (Int, Maybe Suit)
+           bid <- case maybeBid of
+                    Just x -> return x
+                    Nothing -> do writeChan wchannel (Failure "Parser error", gs, hand)
+                                  mkBid p gs hand
+           validatedBid <- case validateBid idx gs bid of 
+                            Nothing -> return bid
+                            Just errorMessage -> do writeChan wchannel (Failure errorMessage, gs, hand)
+                                                    mkBid p gs hand
+           writeChan wchannel (Success "Bid accepted", gs, hand)
+           return validatedBid                   
 
     mkPlay p@(NetworkPlayer {readChannel = channel}, idx) gs hand =
        do string <- readChan channel
@@ -117,6 +147,19 @@ instance PlayerLogic NetworkPlayer where
           case maybeCard of 
             Just x -> return x
             Nothing -> mkPlay p gs hand
+
+    -- postBidHook :: (p, Int) -> Bid -> GameState -> IO ()
+    postBidHook (NetworkPlayer {state= state}, idx) Bid {amount=amount,bidSuit=suit,bidderIdx=bidderIdx} gs hand = 
+      do putStrLn "here"
+         mw <- tryTakeMVar state
+         case mw of 
+          Nothing -> putMVar state (writer ((gs, hand), [bidMessage]))
+          Just w -> do let newW = do w
+                                     tell [bidMessage]
+                                     return (gs, hand)
+                       putMVar state newW
+         return ()
+      where bidMessage = "Hello world"
 
 
 
@@ -141,29 +184,13 @@ promptp parseFun s = liftIO $ do putStrLn s
                                    Nothing -> do putStrLn $ "Couldn't parse input " ++ show string
                                                  promptp parseFun s
 
-validateOne :: (Read a, MonadIO m) => String -> (a -> Bool) -> String -> m a
-validateOne promptMessage predicate errorMessage =
-    do val <- prompt promptMessage
-       if predicate val
-           then return val
-           else do liftIO $ putStrLn errorMessage
-                   validateOne promptMessage predicate errorMessage
-
-validatePrompt :: (Read a, MonadIO m) => String -> [(a -> Bool, String)] -> m a
-validatePrompt promptMessage tests =
-    do val <- prompt promptMessage
-       case find (\(p,_) -> not $ p val) tests of
+validatePrompt :: (MonadIO m) => String -> (String -> Maybe a) -> (a -> Maybe String) -> m a
+validatePrompt promptMessage parser validator =
+  do val <- promptp parser promptMessage
+     case validator val  of
          Nothing -> return val
-         Just (_, errorMessage) -> do liftIO $ putStrLn errorMessage
-                                      validatePrompt promptMessage tests
-
-validatePromptp :: (MonadIO m) => (String -> Maybe a) -> String -> [(a -> Bool, String)] -> m a
-validatePromptp parseFun promptMessage tests =
-  do val <- promptp parseFun promptMessage
-     case find (\(p,_) -> not $ p val) tests of
-         Nothing -> return val
-         Just (_, errorMessage) -> do liftIO $ putStrLn errorMessage
-                                      validatePromptp parseFun promptMessage tests
+         Just errorMessage -> do liftIO $ putStrLn errorMessage
+                                 validatePrompt promptMessage parser validator
 
 instance PlayerLogic HumanPlayer where
     mkBid (p, idx) gs@Game{rounds=round:rs} hand = 
@@ -176,20 +203,14 @@ instance PlayerLogic HumanPlayer where
            liftIO $ putStr "Your hand is "
            liftIO $ print hand
            bid <- validatePrompt "What is your bid?" 
-                                 [(flip elem [0, 2, 3, 4], "A valid bid is 0 (pass), 2, 3, or 4")
-                                 ,(\x -> x == 0 || all (<x) (map amount $ bids round)
-                                  , "You need to bid more than " ++ 
-                                    show (maximum . map amount $ bids round)
-                                  )
-                                 ,(\x -> length (bids round) /= length (players gs) - 1
-                                      || (maximum . map amount $ bids round) /= 0
-                                      || x /= 0
-                                  , "Since you are the last player to bid and everyone else has passed, you must bid at least 2"
-                                  )
-                                 ]
+                                 parseInt $
+                                 validateBidAmount idx gs
            suit <- if bid /= 0
-                   then prompt "What suit?"
-                   else return minBound
+                   then do s <- validatePrompt "What suit?" 
+                                               parseSuit $
+                                               validateBidSuit idx gs bid . Just
+                           return (Just s)
+                   else return Nothing
            return (bid, suit)
 
     mkPlay (p, idx) gs@Game{rounds=rounds@Round{trump=trump
@@ -207,17 +228,8 @@ instance PlayerLogic HumanPlayer where
                           forM_ rest (\(play@Play{card=card}, player) -> liftIO $ putStrLn (show player ++ " followed with " ++ show card))
            liftIO $ putStr "Your hand is "
            liftIO $ print hand
-           validatePromptp parseCard
-                           "What card you do you want to play?"
-                           [(flip elem hand, "You don't have that card")
-                           ,(\c -> not (null ts) || not (null played) || suit c == trump
-                           , "You must lead trump"
-                           )
-                           ,(\c -> suit c == trump
-                               || null played
-                               || suit c == suit (card (last played))
-                               || notElem (suit (card (last played))) (map suit hand)
-                           , "You must play trump or follow suit"
-                           )
-                           ]
+           validatePrompt "What card you do you want to play?"
+                          parseCard $
+                          validateCard idx gs
+                     
 

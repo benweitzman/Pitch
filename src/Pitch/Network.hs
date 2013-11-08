@@ -1,8 +1,11 @@
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, OverloadedStrings #-}
+
 module Pitch.Network (runServer)
        
 where       
   
 import Control.Monad  
+import Control.Monad.Writer
 import Control.Exception
 import Control.Concurrent.Chan
 import Control.Concurrent
@@ -70,22 +73,30 @@ bindToPort min = do result <- try (listenOn $ PortNumber min) :: IO (Either Some
                       Left _ -> bindToPort (min + 1)
                       Right s -> return (s, min)
                                                             
-handleGetRequest :: ToJSON a => Request -> Chan a -> IO String
-handleGetRequest r readChannel = do responseData <- readChan readChannel -- Get the response data from the channel. Where does this data come from?
-                                    return . BS.unpack $ encode responseData
+handleGetRequest :: (ToJSON a, ToJSON b, Monoid a) => Request -> MVar (Writer a b) -> IO String
+handleGetRequest r state = do responseData <- takeMVar state -- Get the response data from the channel. Where does this data come from?
+                              putMVar state (mapWriter (\(s, _) -> (s, mempty)) responseData)
+                              return . BS.unpack $ encode responseData
                                     
 
 handlePostRequest :: ToJSON a => Request -> Chan a -> IO String
-handlePostRequest r readChannel = return "Thanks for your post request!"
+handlePostRequest r readChannel = do responseData <- readChan readChannel
+                                     return . BS.unpack $ encode responseData
 
-runServer :: ToJSON a => (Chan String, Chan a) -> IO ()    
-runServer (wch, rch) = withSocketsDo $ do
+instance (ToJSON a, ToJSON b) => ToJSON (Writer a b) where
+  toJSON w = let (state, messages) = runWriter w 
+             in object ["messages" .= toJSON messages
+                       ,"gamestate" .= toJSON state
+                       ]
+
+runServer :: (ToJSON a, ToJSON b, ToJSON c, Monoid b) => (Chan String, Chan a, MVar (Writer b c)) -> IO ()    
+runServer (wch, rch, state) = withSocketsDo $ do
   (sock, port) <- bindToPort 9000
   putStrLn $ "Listening on port " ++ show port
   forever $ do (handle, hostname, port) <- accept sock
                request <- handleAccept handle hostname
                response <- case rtype request of 
-                 GET -> handleGetRequest request rch
+                 GET -> handleGetRequest request state
                  POST -> do writeChan wch $ getData request
                             handlePostRequest request rch
                respond request response handle

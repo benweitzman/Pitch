@@ -11,6 +11,10 @@ module Pitch.Game (mkRoundState
                   ,Bid (..)
                   ,Play (..)
                   ,Trick (..)
+                  ,validateBidAmount
+                  ,validateBidSuit
+                  ,validateCard
+                  ,validateBid
                   )
 
 where
@@ -19,6 +23,7 @@ import           Control.Monad
 import           Control.Monad.State
 import           Data.List
 import           Data.Maybe 
+import           Data.Monoid
 import           Data.Ord
 import           Pitch.Card
 import           Pitch.Deck
@@ -29,7 +34,7 @@ import           Text.Printf         (printf)
 
 
 data Hand = Hand {cards :: [Card], ownerIdx :: Int} deriving (Show, Eq)
-data Bid = Bid {amount :: Int, bidSuit :: Suit, bidderIdx :: Int} deriving (Show, Eq)
+data Bid = Bid {amount :: Int, bidSuit :: Maybe Suit, bidderIdx :: Int} deriving (Show, Eq)
 data Play = Play {card :: Card, playerIdx :: Int} deriving (Show, Eq)
 data Trick = Trick {played :: [Play], winnerIdx :: Int} deriving (Show, Eq)
 
@@ -86,13 +91,47 @@ checkForWinner = state (\x -> (check x, x))
                                 return (players gs !! winnerIdx, score)
                      else Nothing
 
+validateBidAmount :: Int -> GameState -> Int -> Maybe String
+validateBidAmount idx gs@Game{rounds=r@Round{bids=bids}:rs
+                                         ,players=ps
+                                         } x
+  | x `notElem` [0, 2, 3, 4] = Just "A valid bid is 0 (pass), 2, 3, or 4"
+  | x /= 0 && any (>= x) (map amount bids) = Just $ "You need to bid more than " ++ show (maximum $ map amount bids)
+  | x == 0 && length bids + 1 == length ps && maximum (map amount bids) == 0 = Just "Since you are the last player to bid and everyone else has passed, you must bid at least 2"
+  | otherwise = Nothing
+
+validateBidSuit :: Int -> GameState -> Int -> Maybe Suit -> Maybe String
+validateBidSuit _ _ x Nothing
+  | x /= 0 = Just "You must specify a suit"
+  | otherwise = Nothing
+validateBidSuit idx gs@Game{rounds=Round{hands=hands}:rs} x (Just s) 
+  | s `notElem` map suit (cards . fromJust $ find ((== idx) . ownerIdx) hands) = Just "You don't have any cards of that suit"
+  | otherwise = Nothing
+
+validateBid :: Int -> GameState -> (Int, Maybe Suit) -> Maybe String
+validateBid idx gs (x, s) = getFirst $ First (validateBidAmount idx gs x) <> First (validateBidSuit idx gs x s)
+
+validateCard :: Int -> GameState -> Card -> Maybe String
+validateCard idx gs@Game{rounds=Round{hands=hands
+                                                 ,trump=trump
+                                                 ,tricks=Trick{played=played}:ts
+                                                 }:rs} c 
+  | c `notElem` (cards . fromJust $ find ((== idx) . ownerIdx) hands) = Just "You don't have that card"
+  | null ts && null played && suit c /= trump = Just "You must lead trump"
+  | suit c /= trump && not (null played) 
+ && suit c /= suit (card (last played)) 
+ && suit (card (last played)) `notElem` map suit (cards . fromJust $ find ((== idx) . ownerIdx) hands)
+  = Just "You must play trump or follow suit"
+  | otherwise = Nothing
+
 doBid :: (Player, Int) -> Game ()
-doBid (Player p, idx) = do g@Game{rounds=r@Round{hands=hands}:rs} <- get
+doBid (Player p, idx) = do g@Game{players=ps,rounds=r@Round{hands=hands}:rs} <- get
                            let hand = cards . fromJust $ find ((== idx) . ownerIdx) hands
                            (amount, suit) <- liftIO $ mkBid (p, idx) g hand
                            g@Game {rounds=r@Round{bids=bs}:rs} <- get
                            let newBid = Bid amount suit idx
                            put g{rounds=r{bids=newBid:bs}:rs}
+                           liftIO $ forM_ (zip ps [0..]) (\(Player p, x) -> postBidHook (p, x) newBid g{rounds=r{bids=newBid:bs}:rs} (cards . fromJust $ find ((== x) .ownerIdx) hands))
                            return ()
 
 doPlay :: (Player, Int) -> Game ()
@@ -179,12 +218,13 @@ playRound = do  liftIO $ putStrLn "playing a round"
                 forM_ (take (length ps) ds) doBid
                 g@Game {dealers=d:ds, rounds=r@Round{bids=bids}:rs} <- get
                 let maxBid = maximumBy (comparing amount) bids
-                put g{dealers=ds, rounds=r{trump=bidSuit maxBid}:rs}
+                let trump = fromJust $ bidSuit maxBid
+                put g{dealers=ds, rounds=r{trump=trump}:rs}
                 let bidder = ps !! bidderIdx maxBid
-                liftIO $ forM_ playersWithIndex (\(Player p, idx) -> acknowledgeTrump (p, idx) maxBid g)
+                liftIO $ forM_ playersWithIndex (\(Player p, idx) -> acknowledgeTrump (p, idx) maxBid g (cards . fromJust $ find ((== idx) .ownerIdx) (hands r)))
                 tricks <- forM [1 .. 6] (const playTrick)
                 liftIO $ print tricks
-                let roundTalliesAndGame = map (tallyScore (bidSuit maxBid) tricks) playersWithIndex
+                let roundTalliesAndGame = map (tallyScore trump tricks) playersWithIndex
                 let roundTallies = map (\(pts, game) -> if game == maximum (map snd roundTalliesAndGame)
                                                         then pts + 1
                                                         else pts) roundTalliesAndGame
@@ -212,22 +252,21 @@ playGame = do playRound
 class (Show p) => PlayerLogic p where
     --  The result of the state is the bid and the suit that the player will choose
     -- if they win the bid
-    mkBid :: (p, Int) -> GameState -> [Card] -> IO (Int, Suit)
+    mkBid :: (p, Int) -> GameState -> [Card] -> IO (Int, Maybe Suit)
 
     mkPlay :: (p, Int) -> GameState -> [Card] -> IO Card
     
-    -- post*Hooks will be called on each player after any other player takes some action
-    -- Presumable, a player will know if they just took an action.
+    -- post*Hooks will be called on each player after any player takes some action
     -- The default implementation is just to do nothing
-    postBidHook :: (p, Int) -> Bid -> GameState -> IO ()
-    postBidHook _ _ _ = return () 
+    postBidHook :: (p, Int) -> Bid -> GameState -> [Card] -> IO ()
+    postBidHook _ _ _ _ = return () 
     
-    postPlayHook :: (p, Int) -> Card -> GameState -> IO ()
-    postPlayHook _ _ _ = return ()
+    postPlayHook :: (p, Int) -> Card -> GameState -> [Card] -> IO ()
+    postPlayHook _ _ _ _= return ()
 
     -- called on each player after trump has been decided
-    acknowledgeTrump :: (p, Int) -> Bid -> GameState -> IO ()
-    acknowledgeTrump _ _ _ = return ()
+    acknowledgeTrump :: (p, Int) -> Bid -> GameState -> [Card] -> IO ()
+    acknowledgeTrump _ _ _ _ = return ()
     
     
 
