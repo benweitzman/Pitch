@@ -28,6 +28,6 @@ runProxy p = do uri <- getURI
                              let parsed = decode (L.pack body) :: Maybe NetStatus
                              case parsed of 
                                Nothing -> return ()
-                               Just (NetStatus messages (pgs, hand)) -> forM_ messages putStrLn
+                               Just (NetStatus messages (pgs, hand, action)) -> forM_ messages putStrLn
                              threadDelay 500000
 

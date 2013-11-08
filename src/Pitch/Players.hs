@@ -38,19 +38,21 @@ instance ToJSON Status where
 
 data NetworkPlayer = NetworkPlayer {readChannel :: Chan String
                                    ,writeChannel :: Chan (Status, GameState, [Card])
-                                   ,state :: MVar (Writer [String] (GameState, [Card]))
+                                   ,state :: MVar (Writer [String] (GameState, [Card], ActionRequired))
                                    ,thread :: ThreadId
                                    ,name :: String
                                    }
 data PartialRoundState = PartialRound [Bid] Suit [Trick] deriving (Show)
 data PartialGameState = PartialGame [Int] [String] [PartialRoundState]  deriving (Show)                   
+data ActionRequired = Wait | BidAction | PlayAction deriving (Show)
 
-data NetStatus = NetStatus [String] (PartialGameState, [Card]) deriving (Show)
+data NetStatus = NetStatus {messages :: [String], gamestate :: (PartialGameState, [Card], ActionRequired)} deriving (Show)
 
-instance FromJSON (PartialGameState, [Card]) where
-  parseJSON (Object v) = (,) <$>
-                       v .: "gamestate" <*>
-                       v .: "hand"
+instance FromJSON (PartialGameState, [Card], ActionRequired) where
+  parseJSON (Object v) = (,,) <$>
+                       v .: "global" <*>
+                       v .: "hand" <*>
+                       v .: "action"
   parseJSON _ = mzero
 
 instance FromJSON NetStatus where
@@ -66,10 +68,25 @@ instance ToJSON (Status, GameState, [Card]) where
                                      ,"hand" .= toJSON hand
                                      ]
 
-instance ToJSON (GameState, [Card]) where
-  toJSON (gs, hand) = object ["gamestate" .= toJSON gs
-                             ,"hand" .= toJSON hand
-                             ]
+instance ToJSON (GameState, [Card], ActionRequired) where
+  toJSON (gs, hand, action) = object ["global" .= toJSON gs
+                                     ,"hand" .= toJSON hand
+                                     ,"action" .= toJSON action
+                                     ]
+instance ToJSON ActionRequired where                              
+  toJSON action = String . T.pack $ case action of
+                                      Wait -> "Wait"
+                                      BidAction -> "Bid"
+                                      PlayAction -> "Play"
+  
+instance FromJSON ActionRequired where
+  parseJSON (String v) = case T.unpack v of 
+                           "Wait" -> return Wait
+                           "Bid" -> return BidAction
+                           "Play" -> return PlayAction
+                           _ -> mzero
+  parseJSON _ = mzero                           
+                           
 
 instance ToJSON Card where
   toJSON (Card rank suit) = object ["rank" .= toJSON rank, "suit" .= toJSON suit]
@@ -230,11 +247,10 @@ instance PlayerLogic NetworkPlayer where
     postBidHook (NetworkPlayer {state= state}, idx) Bid {amount=amount,bidSuit=suit,bidderIdx=bidderIdx} gs hand = 
       do mw <- tryTakeMVar state
          case mw of 
-          Nothing -> putMVar state (writer ((gs, hand), [bidMessage]))
+          Nothing -> putMVar state (writer ((gs, hand, Wait), [bidMessage | idx /= bidderIdx]))
           Just w -> do let newW = do w
-                                     if (idx /= bidderIdx) then tell [bidMessage]
-                                                           else return ()
-                                     return (gs, hand)
+                                     when (idx /= bidderIdx) $ tell [bidMessage]
+                                     return (gs, hand, Wait)
                        putMVar state newW
          return ()
       where bidMessage = case amount of
