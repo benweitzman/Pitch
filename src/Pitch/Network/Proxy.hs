@@ -20,14 +20,37 @@ getURI = do putStrLn "What server are you connecting to?"
               Just uri -> return uri
               Nothing -> do putStrLn "Invalid server"
                             getURI
+
+mkPostRequest :: URI -> String -> Request String
+mkPostRequest uri body =  Request { rqURI     = uri
+                                  , rqMethod  = POST
+                                  , rqHeaders = [ mkHeader HdrContentType "application/x-www-form-urlencoded"
+                                                , mkHeader HdrContentLength (show (length body))
+                                                ]
+                                  , rqBody    = body
+                                  }         
+
+postJSON :: ToJSON a => URI -> a -> IO ()
+postJSON uri obj =  let responseJSON = L.unpack $ encode obj
+                        pRequest = mkPostRequest uri responseJSON
+                    in do simpleHTTP pRequest
+                          return ()                               
              
 runProxy :: Player -> IO () 
-runProxy p = do uri <- getURI
-                forever $ do response <- simpleHTTP (getRequest (show uri))
-                             body <- getResponseBody response
-                             let parsed = decode (L.pack body) :: Maybe NetStatus
-                             case parsed of 
-                               Nothing -> return ()
-                               Just (NetStatus messages (pgs, hand, action)) -> forM_ messages putStrLn
-                             threadDelay 500000
+runProxy (Player p) = do uri <- getURI
+                         forever $ do response <- simpleHTTP (getRequest (show uri))
+                                      body <- getResponseBody response
+                                      let parsed = decode (L.pack body) :: Maybe NetStatus
+                                      --print parsed
+                                      case parsed of 
+                                        Nothing -> return ()
+                                        Just (NetStatus messages (pgs, hand, action, idx)) -> 
+                                           do forM_ messages putStrLn
+                                              case action of 
+                                               Wait -> return ()
+                                               BidAction -> do (amount, msuit) <- mkBid (p, idx) pgs hand
+                                                               postJSON uri (amount, msuit) 
+                                               PlayAction -> do card <- mkPlay (p, idx) pgs hand
+                                                                postJSON uri card
+                                      threadDelay 500000
 
