@@ -5,6 +5,7 @@ where
 import Pitch.Network
 import Pitch.Players
 import Pitch.Game
+import Pitch.Card
 import Control.Concurrent
 import Control.Monad
 import Data.Aeson
@@ -33,15 +34,18 @@ mkPostRequest uri body =  Request { rqURI     = uri
 postJSON :: ToJSON a => URI -> a -> IO ()
 postJSON uri obj =  let responseJSON = L.unpack $ encode obj
                         pRequest = mkPostRequest uri responseJSON
-                    in do simpleHTTP pRequest
-                          return ()                               
+                    in do response <- simpleHTTP pRequest
+                          body <- getResponseBody response                               
+                          let parsed = decode (L.pack body) :: Maybe (Status, PartialGameState, [Card])
+                          case parsed of    
+                            Just (Failure m, _, _) -> putStrLn $ "Server says: " ++ m
+                            _ -> return ()
              
 runProxy :: Player -> IO () 
 runProxy (Player p) = do uri <- getURI
                          forever $ do response <- simpleHTTP (getRequest (show uri))
                                       body <- getResponseBody response
                                       let parsed = decode (L.pack body) :: Maybe NetStatus
-                                      --print parsed
                                       case parsed of 
                                         Nothing -> return ()
                                         Just (NetStatus messages (pgs, hand, action, idx)) -> 

@@ -15,6 +15,7 @@ main = do
   gen <- getStdGen
   netPlayer1 <- mkNetworkPlayer "net1"
   netPlayer2 <- mkNetworkPlayer "net2"
-  let gameState = mkGameState gen [Player netPlayer1, Player (Human "John"), Player (Human "Alex"), Player netPlayer2]
+  netPlayer3 <- mkNetworkPlayer "net3"
+  let gameState = mkGameState gen [Player (Human "John"), Player netPlayer1, Player netPlayer2, Player netPlayer3]
   runStateT playGame gameState
   

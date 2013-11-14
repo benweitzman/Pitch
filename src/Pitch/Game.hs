@@ -125,9 +125,10 @@ validateCard idx (PartialGame scoresp ps (PartialRound bids trump (Trick{played=
                  , hand) c 
   | c `notElem` hand = Just "You don't have that card"
   | null ts && null played && suit c /= trump = Just "You must lead trump"
-  | suit c /= trump && not (null played) 
- && suit c /= suit (card (last played)) 
- && suit (card (last played)) `notElem` map suit hand
+  | suit c /= trump
+  && not (null played)
+  && suit c /= suit (card (last played)) 
+  && suit (card (last played)) `elem` map suit hand
   = Just "You must play trump or follow suit"
   | otherwise = Nothing
 

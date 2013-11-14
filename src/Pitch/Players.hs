@@ -7,6 +7,7 @@ module Pitch.Players (NetworkPlayer (..)
                      ,PartialRoundState (..)
                      ,NetStatus (..)
                      ,ActionRequired (..)
+                     ,Status (..)
                      )
 
 where
@@ -37,6 +38,15 @@ instance ToJSON Status where
   toJSON (Success m) = object ["code" .= toJSON (20 :: Int), "message" .= toJSON m]
   toJSON (Failure m) = object ["code" .= toJSON (50 :: Int), "message" .= toJSON m]
 
+mkStatus :: Int -> String -> Status
+mkStatus 20 = Success
+mkStatus 50 = Failure
+
+instance FromJSON Status where
+  parseJSON (Object v) = mkStatus <$>
+                           v .: "code" <*>
+                           v .: "message"
+  parseJSON _ = mzero                           
 
 data NetworkPlayer = NetworkPlayer {readChannel :: Chan String
                                    ,writeChannel :: Chan (Status, PartialGameState, [Card])
@@ -69,6 +79,14 @@ instance ToJSON (Status, PartialGameState, [Card]) where
                                      ,"gamestate" .= toJSON gs
                                      ,"hand" .= toJSON hand
                                      ]
+                              
+instance FromJSON (Status, PartialGameState, [Card]) where                              
+  parseJSON (Object v) = (,,) <$>
+                           v .: "status" <*>
+                           v .: "gamestate" <*>
+                           v .: "hand"
+  parseJSON _ = mzero
+                           
 
 instance ToJSON (PartialGameState, [Card], ActionRequired, Int) where
   toJSON (gs, hand, action, idx) = object ["global" .= toJSON gs
