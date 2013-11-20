@@ -208,8 +208,6 @@ playTrick = do g@Game {rounds=r@Round{bids=bids, tricks=ts}:rs, dealers=ds, play
                let playOrder = take (length ps) $ dropWhile ((/= startingPlayerIdx) . snd) ds
                forM_ playOrder doPlay
                g@Game {rounds=r@Round{tricks=t:ts, trump=trump}:rs} <- get
-               liftIO $ print trump
-               liftIO $ print t
                let t' = trickWinner trump t
                put g{rounds=r{tricks=t':ts}:rs}
                return t'
@@ -234,7 +232,6 @@ playRound = do  liftIO $ putStrLn "playing a round"
                 let bidder = ps !! bidderIdx maxBid
                 liftIO $ forM_ playersWithIndex (\(Player p, idx) -> acknowledgeTrump (p, idx) maxBid (partialGame g) (cards . fromJust $ find ((== idx) .ownerIdx) (hands r)))
                 tricks <- forM [1 .. 6] (const playTrick)
-                liftIO $ print tricks
                 let roundTalliesAndGame = map (tallyScore trump tricks) playersWithIndex
                 let roundTallies = map (\(pts, game) -> if game == maximum (map snd roundTalliesAndGame)
                                                         then pts + 1

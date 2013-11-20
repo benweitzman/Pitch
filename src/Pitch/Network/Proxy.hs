@@ -11,6 +11,7 @@ import Control.Monad
 import Data.Aeson
 import Network.HTTP
 import Network.URI
+import Network.HTTP.Base
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Data.Text as T
 
@@ -43,7 +44,11 @@ postJSON uri obj =  let responseJSON = L.unpack $ encode obj
              
 runProxy :: Player -> IO () 
 runProxy (Player p) = do uri <- getURI
-                         forever $ do response <- simpleHTTP (getRequest (show uri))
+                         authResponse <- simpleHTTP . getRequest $ show uri
+                         key <- getResponseBody authResponse
+                         let uri' = uri{uriPath="/" ++ urlEncode (init key)}
+                         print uri'                      
+                         forever $ do response <- simpleHTTP (getRequest (show uri'))
                                       body <- getResponseBody response
                                       let parsed = decode (L.pack body) :: Maybe NetStatus
                                       case parsed of 
@@ -53,8 +58,8 @@ runProxy (Player p) = do uri <- getURI
                                               case action of 
                                                Wait -> return ()
                                                BidAction -> do (amount, msuit) <- mkBid (p, idx) pgs hand
-                                                               postJSON uri (amount, msuit) 
+                                                               postJSON uri' (amount, msuit) 
                                                PlayAction -> do card <- mkPlay (p, idx) pgs hand
-                                                                postJSON uri card
+                                                                postJSON uri' card
                                       threadDelay 500000
 

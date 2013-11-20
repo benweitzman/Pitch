@@ -29,6 +29,7 @@ import Data.Ord
 import Data.Monoid
 import Data.ByteString.Lazy.Char8 (pack)
 import System.IO
+import System.Random
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 
@@ -51,6 +52,7 @@ instance FromJSON Status where
 data NetworkPlayer = NetworkPlayer {readChannel :: Chan String
                                    ,writeChannel :: Chan (Status, PartialGameState, [Card])
                                    ,state :: MVar (Writer [String] (PartialGameState, [Card], ActionRequired, Int))
+                                   ,authentication :: MVar (Bool, String)
                                    ,thread :: ThreadId
                                    ,name :: String
                                    }          
@@ -210,17 +212,22 @@ instance FromJSON Play where
                           v .: "playerIndex"
   parseJSON _ = mzero                          
 
-mkNetworkPlayer :: String -> IO NetworkPlayer
-mkNetworkPlayer n = do rchannel <- newChan
-                       wchannel <- newChan
-                       state <- newEmptyMVar
-                       threadId <- forkIO $ runServer (rchannel, wchannel, state)
-                       return NetworkPlayer {readChannel = rchannel
-                                            ,writeChannel = wchannel
-                                            ,state = state
-                                            ,thread = threadId
-                                            ,name = n
-                                            }
+mkNetworkPlayer :: StdGen -> String -> IO (NetworkPlayer, StdGen)
+mkNetworkPlayer g n = do rchannel <- newChan
+                         wchannel <- newChan
+                         state <- newEmptyMVar
+                         authentication <- newMVar (False, token)
+                         threadId <- forkIO $ runServer (rchannel, wchannel, state, authentication)
+                         return (NetworkPlayer {readChannel = rchannel
+                                               ,writeChannel = wchannel
+                                               ,state = state
+                                               ,thread = threadId
+                                               ,name = n
+                                               ,authentication = authentication
+                                               }
+                                 ,g'
+                                 )
+  where (token, g') = iterate (\(xs, g) -> let (x, g') = randomR ('A', 'Z') g in (x:xs, g')) ([], g) !! 20
 
 instance Show NetworkPlayer where
     show NetworkPlayer {name = n} = n
