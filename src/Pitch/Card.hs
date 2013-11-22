@@ -90,4 +90,4 @@ instance Enum Card where
 instance Show Card where
   show (Card r s) = show r ++ show s  
   
-  
+instance Read Card where
