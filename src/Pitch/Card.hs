@@ -22,7 +22,7 @@ data Rank = Jack
           | Queen
           | King
           | Ace
-          | Number Int deriving (Eq, Read)
+          | Number Int deriving (Eq)
 
 instance Show Rank where
   show Jack = "J"

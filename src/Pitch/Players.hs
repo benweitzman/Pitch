@@ -3,8 +3,6 @@
 module Pitch.Players (NetworkPlayer (..)
                      ,HumanPlayer (..)
                      ,mkNetworkPlayer
-                     ,PartialGameState (..)
-                     ,PartialRoundState (..)
                      ,NetStatus (..)
                      ,ActionRequired (..)
                      ,Status (..)
@@ -50,8 +48,8 @@ instance FromJSON Status where
   parseJSON _ = mzero                           
 
 data NetworkPlayer = NetworkPlayer {readChannel :: Chan String
-                                   ,writeChannel :: Chan (Status, PartialGameState, [Card])
-                                   ,state :: MVar (Writer [String] (PartialGameState, [Card], ActionRequired, Int))
+                                   ,writeChannel :: Chan (Status, GameState, [Card])
+                                   ,state :: MVar (Writer [String] (GameState, [Card], ActionRequired, Int))
                                    ,authentication :: MVar (Bool, String)
                                    ,thread :: ThreadId
                                    ,name :: String
@@ -59,9 +57,9 @@ data NetworkPlayer = NetworkPlayer {readChannel :: Chan String
 
 data ActionRequired = Wait | BidAction | PlayAction deriving (Show)
 
-data NetStatus = NetStatus {messages :: [String], gamestate :: (PartialGameState, [Card], ActionRequired, Int)} deriving (Show)
+data NetStatus = NetStatus {messages :: [String], gamestate :: (GameState, [Card], ActionRequired, Int)} deriving (Show)
 
-instance FromJSON (PartialGameState, [Card], ActionRequired, Int) where
+instance FromJSON (GameState, [Card], ActionRequired, Int) where
   parseJSON (Object v) = (,,,) <$>
                        v .: "global" <*>
                        v .: "hand" <*>
@@ -76,13 +74,13 @@ instance FromJSON NetStatus where
   parseJSON _          = mzero
   
 
-instance ToJSON (Status, PartialGameState, [Card]) where
+instance ToJSON (Status, GameState, [Card]) where
   toJSON (status, gs, hand) = object ["status" .= toJSON status
                                      ,"gamestate" .= toJSON gs
                                      ,"hand" .= toJSON hand
                                      ]
                               
-instance FromJSON (Status, PartialGameState, [Card]) where                              
+instance FromJSON (Status, GameState, [Card]) where                              
   parseJSON (Object v) = (,,) <$>
                            v .: "status" <*>
                            v .: "gamestate" <*>
@@ -90,7 +88,7 @@ instance FromJSON (Status, PartialGameState, [Card]) where
   parseJSON _ = mzero
                            
 
-instance ToJSON (PartialGameState, [Card], ActionRequired, Int) where
+instance ToJSON (GameState, [Card], ActionRequired, Int) where
   toJSON (gs, hand, action, idx) = object ["global" .= toJSON gs
                                           ,"hand" .= toJSON hand
                                           ,"action" .= toJSON action
@@ -151,13 +149,13 @@ instance FromJSON Rank where
                            Nothing -> mzero
   parseJSON _ = mzero
   
-instance ToJSON PartialGameState where  
-  toJSON (PartialGame ss ps rounds) = object ["scores" .= toJSON ss
-                                             ,"players" .= toJSON ps
-                                             ,"rounds" .= toJSON rounds
-                                             ]
-instance FromJSON PartialGameState where
-  parseJSON (Object v) = PartialGame <$>
+instance ToJSON GameState where  
+  toJSON (Game ss ps rounds) = object ["scores" .= toJSON ss
+                                      ,"players" .= toJSON ps
+                                      ,"rounds" .= toJSON rounds
+                                      ]
+instance FromJSON GameState where
+  parseJSON (Object v) = Game <$>
                           v .: "scores" <*>
                           v .: "players" <*>
                           v .: "rounds"
@@ -251,15 +249,15 @@ instance FromJSON (Int, Maybe Suit) where
      -- A non-Object value is of the wrong type, so fail.
     parseJSON _          = mzero
     
-setAction :: MVar (Writer [String] (PartialGameState, [Card], ActionRequired, Int)) -> ActionRequired -> IO ()
+setAction :: MVar (Writer [String] (GameState, [Card], ActionRequired, Int)) -> ActionRequired -> IO ()
 setAction mvar ar = modifyMVar_ mvar $ \w -> return (do (a, b, _, c) <- w
                                                         return (a, b, ar, c))
 
-setGameState :: MVar (Writer [String] (PartialGameState, [Card], ActionRequired, Int)) -> PartialGameState -> IO ()
+setGameState :: MVar (Writer [String] (GameState, [Card], ActionRequired, Int)) -> GameState -> IO ()
 setGameState mvar gs = modifyMVar_ mvar $ \w -> return (do (_, a, b, c) <- w
                                                            return (gs, a, b, c))
 
-setHand :: MVar (Writer [String] (PartialGameState, [Card], ActionRequired, Int)) -> [Card] -> IO ()
+setHand :: MVar (Writer [String] (GameState, [Card], ActionRequired, Int)) -> [Card] -> IO ()
 setHand mvar hand = modifyMVar_ mvar $ \w -> return (do (a, _, b, c) <- w
                                                         return (a, hand, b, c))
 
@@ -275,10 +273,11 @@ updateMVAR mvar v = do mw <- tryTakeMVar mvar
                          Just x -> putMVar mvar (do x
                                                     return v)
 
-instance PlayerLogic NetworkPlayer where
-    initGameState (p@NetworkPlayer{state=state}, idx) gs hand = updateMVAR state (gs, hand, Wait, idx)
-
-    mkBid p@(NetworkPlayer {readChannel = rchannel, writeChannel = wchannel, state=state}, idx) gs hand = 
+networkPlayer :: String -> Player
+networkPlayer n = Player{
+    initGameState = \pid gs -> updateMVAR state (gs, Wait, pid)
+    ,
+    mkBid = \pid gs -> 
         do setAction state BidAction
            setGameState state gs
            string <- readChan rchannel
@@ -294,8 +293,8 @@ instance PlayerLogic NetworkPlayer where
            writeChan wchannel (Success "Bid accepted", gs, hand)
            setAction state Wait
            return validatedBid                   
-
-    mkPlay p@(NetworkPlayer {readChannel = channel, writeChannel = wchannel, state=state}, idx) gs hand =
+    ,
+    mkPlay = \pid gs ->
        do setAction state PlayAction
           setGameState state gs
           string <- readChan channel
@@ -311,39 +310,35 @@ instance PlayerLogic NetworkPlayer where
           writeChan wchannel (Success "Card accepted", gs, hand)
           setAction state Wait
           return validatedCard                                             
-
+    ,
     -- postBidHook :: (p, Int) -> Bid -> GameState -> IO ()
-    postBidHook (NetworkPlayer {state= state}, idx) 
-                Bid {amount=amount,bidSuit=suit,bidderIdx=bidderIdx} 
-                gs@(PartialGame scores players rounds) 
-                hand = 
-      do putMessage state bidMessage
-         setHand state hand
-         setGameState state gs
-      where bidMessage = case amount of
+    postBidHook = \pid
+                   Bid {amount=amount,bidSuit=suit,bidderIdx=bidderIdx} 
+                   gs@(Game scores players rounds) 
+                   -> 
+      do let bidMessage = case amount of
                            0 -> players !! bidderIdx ++ " passed"
                            x -> players !! bidderIdx ++ " bid " ++ show x
-
-    --  postPlayHook :: (p, Int) -> Play -> PartialGameState -> [Card] -> IO ()                       
-    postPlayHook (NetworkPlayer {state=state}, idx)
-                 Play {card=card,playerIdx=playerIdx}
-                 gs@(PartialGame scores players rounds)
-                 hand = 
-      do putMessage state playMessage
+         putMessage state bidMessage
          setHand state hand
          setGameState state gs
-      where playMessage = players !! playerIdx ++ " played " ++ show card
-
-    acknowledgeTrump (NetworkPlayer {state=state}, idx)
-                     Bid {amount=amount,bidSuit=Just suit,bidderIdx=bidderIdx} 
-                     pgs
-                     hand =
+    ,
+    --  postPlayHook :: (p, Int) -> Play -> GameState -> [Card] -> IO ()                       
+    postPlayHook = \pid
+                    Play {card=card,playerIdx=playerIdx}
+                    gs@(Game scores players rounds)
+                    ->  
+      do let playMessage = players !! playerIdx ++ " played " ++ show card
+         putMessage state playMessage
+         setHand state hand
+         setGameState state gs
+    ,
+    acknowledgeTrump = \pid
+                        Bid {amount=amount,bidSuit=Just suit,bidderIdx=bidderIdx} 
+                        _
+                        ->
       putMessage state $ "Trump is " ++ show suit
-
-data HumanPlayer = Human String deriving (Eq)
-
-instance Show HumanPlayer where
-    show (Human name) = name
+}
 
 prompt :: (Read a, MonadIO m) => String -> m a
 prompt s = liftIO $ do putStrLn s
@@ -372,8 +367,11 @@ validatePrompt promptMessage parser validator =
          Just errorMessage -> do liftIO $ putStrLn errorMessage
                                  validatePrompt promptMessage parser validator
 
-instance PlayerLogic HumanPlayer where 
-    mkBid (p, idx) gs@(PartialGame scores players (PartialRound bids trump tricks:rs)) hand = 
+networkPlayer :: String -> Player
+networkPlayer n = Player{
+    mkBid = \pid
+             gs@(Game scores players (PartialRound bids trump tricks:rs))
+             ->
         do liftIO $ putStrLn (show p ++ ", it is your turn to bid")
            if all (==0) (map amount bids)
               then liftIO $ putStrLn "Nobody has bid yet"
@@ -392,10 +390,14 @@ instance PlayerLogic HumanPlayer where
                            return (Just s)
                    else return Nothing
            return (bid, suit)
-
-    mkPlay (p, idx) gs@(PartialGame scores players (PartialRound bids trump
-                                                               (Trick{played=played}:ts
-                                               ):rs)) hand = 
+    ,
+    mkPlay = \pid 
+              gs@(Game scores players (PartialRound bids 
+                                                           trump
+                                                           (Trick{played=played}:ts
+                                                           )
+                                             :rs))
+              ->
         do liftIO $ putStrLn (show p ++ ", it is your turn to play")
            if null played
                then liftIO $ putStrLn "Your lead"
@@ -408,5 +410,5 @@ instance PlayerLogic HumanPlayer where
            validatePrompt "What card you do you want to play?"
                           parseCard $
                           validateCard idx (gs, hand)
-                     
+}
 
