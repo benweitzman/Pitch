@@ -18,8 +18,6 @@ import qualified Data.Text as T
 
 getURI :: IO URI
 getURI = do putStrLn "What server are you connecting to?"
-            a <- getArgs
-            print a
             server <- getLine
             case parseURI server of
               Just uri -> return uri
@@ -50,7 +48,6 @@ runProxy (Player p) = do uri <- getURI
                          authResponse <- simpleHTTP . getRequest $ show uri
                          key <- getResponseBody authResponse
                          let uri' = uri{uriPath = '/' : urlEncode (init key)}
-                         print uri'                      
                          forever $ do response <- simpleHTTP (getRequest (show uri'))
                                       body <- getResponseBody response
                                       let parsed = decode (L.pack body) :: Maybe NetStatus

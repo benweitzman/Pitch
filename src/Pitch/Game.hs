@@ -95,8 +95,8 @@ type Game =  StateT GameState IO
 
 checkForWinner :: Game (Maybe (Player, Int))
 checkForWinner = state (\x -> (check x, x))
-    where check gs = if elem 11 $ scores gs
-                     then let scoresAndIndexes = filter (\x -> fst x == 11) $ zip (scores gs) [1..]
+    where check gs = if any (>= 11) $ scores gs
+                     then let scoresAndIndexes = filter ((>= 11) . fst) $ zip (scores gs) [1..]
                           in do (winnerIdx, score) <- find (\(widx, _) -> wonBid widx (lastRound gs)) scoresAndIndexes
                                 return (players gs !! winnerIdx, score)
                      else Nothing
@@ -222,7 +222,7 @@ playRound = do  liftIO $ putStrLn "playing a round"
                        } <- get
                 let (r, gtr') = mkRoundState gtr (length ps)
                 let playersWithIndex = zip ps [0..]
-                liftIO $ forM_ playersWithIndex (\(Player p, idx) -> initGameState (p, idx) (partialGame g{rounds=r:rs}) (cards . fromJust $ find ((== idx) .ownerIdx) (hands r)))
+                liftIO $ forM_ playersWithIndex (\(Player p, idx) -> initGameState (p, idx) (partialGame g{rounds=r:rs}) (cards . fromJust $ find ((== idx) . ownerIdx) (hands r)))
                 put g{generator=gtr', rounds=r:rs}
                 forM_ (take (length ps) ds) doBid
                 g@Game {dealers=d:ds, rounds=r@Round{bids=bids}:rs} <- get
@@ -230,7 +230,7 @@ playRound = do  liftIO $ putStrLn "playing a round"
                 let trump = fromJust $ bidSuit maxBid
                 put g{dealers=ds, rounds=r{trump=trump}:rs}
                 let bidder = ps !! bidderIdx maxBid
-                liftIO $ forM_ playersWithIndex (\(Player p, idx) -> acknowledgeTrump (p, idx) maxBid (partialGame g) (cards . fromJust $ find ((== idx) .ownerIdx) (hands r)))
+                liftIO $ forM_ playersWithIndex (\(Player p, idx) -> acknowledgeTrump (p, idx) maxBid (partialGame g) (cards . fromJust $ find ((== idx) . ownerIdx) (hands r)))
                 tricks <- forM [1 .. 6] (const playTrick)
                 let roundTalliesAndGame = map (tallyScore trump tricks) playersWithIndex
                 let roundTallies = map (\(pts, game) -> if game == maximum (map snd roundTalliesAndGame)
@@ -243,6 +243,7 @@ playRound = do  liftIO $ putStrLn "playing a round"
                                                roundTallies
                 let newScores = zipWith (+) roundScores ss
                 liftIO . putStr $ "Scores: " ++ show newScores
+                g <- get
                 put g{scores=newScores}                              
                 return ()
 
