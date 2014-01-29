@@ -4,7 +4,7 @@ module Pitch.Game (mkRoundState
                   ,mkGameState
                   ,playGame
                   ,Player (..)
-                  ,PlayerLogic (..)
+                  ,defaultPlayer
                   ,Hand (..)
                   ,Bid (..)
                   ,Play (..)
@@ -13,8 +13,8 @@ module Pitch.Game (mkRoundState
                   ,validateBidSuit
                   ,validateCard
                   ,validateBid
-                  ,PartialGameState (..)
-                  ,PartialRoundState (..)
+                  ,GameState (..)
+                  ,RoundState (..)                   
                   )
 
 where
@@ -31,98 +31,88 @@ import           Pitch.Parser
 import           Pitch.Utils
 import           System.Random
 import           Text.Printf         (printf)
+import qualified Pitch.Internal.Game as G
+import           Pitch.Internal.PartialGame
+import           Pitch.Internal.Common
 
-data Hand = Hand {cards :: [Card], ownerIdx :: Int} deriving (Show, Eq)
-data Bid = Bid {amount :: Int, bidSuit :: Maybe Suit, bidderIdx :: Int} deriving (Show, Eq)
-data Play = Play {card :: Card, playerIdx :: Int} deriving (Show, Eq)
-data Trick = Trick {played :: [Play], winnerIdx :: Int} deriving (Show, Eq)
+type Pitch = StateT G.GameState IO 
 
 newTrick :: Trick
 newTrick = Trick [] (-1)
 
-data RoundState = Round { deck   :: Deck
-                        , hands  :: [Hand]
-                        , bids   :: [Bid]
-                        , trump  :: Suit
-                        , tricks :: [Trick]
-                        } deriving (Show)
-
-mkRoundState :: StdGen -> Int -> (RoundState, StdGen)
-mkRoundState g ps = (Round {deck = deck'
-                           ,hands = zipWith Hand hs [0..]
-                           ,bids = []
-                           ,trump = minBound
-                           ,tricks = []
-                           }
+mkRoundState :: StdGen -> [PlayerId] -> (G.RoundState, StdGen)
+mkRoundState g ps = (G.Round {G.deck = deck'
+                             ,G.hands = zipWith Hand hs ps
+                             ,G.bids = []
+                             ,G.trump = minBound
+                             ,G.tricks = []
+                             }
                     ,g'
                     )
-    where (hs, deck') = runState (forM [0..ps-1] (const $ deal 6)) d
+    where (hs, deck') = runState (forM ps (const $ deal 6)) d
           (d, g') = mkDeck g
 
-data PartialRoundState = PartialRound [Bid] Suit [Trick] deriving (Show)
-data PartialGameState = PartialGame [Int] [String] [PartialRoundState]  deriving (Show)   
+partialRound :: G.RoundState -> RoundState
+partialRound G.Round{G.bids=bids
+                    ,G.trump=trump
+                    ,G.tricks=tricks
+                    } = 
+  Round bids trump tricks
 
-partialRound :: RoundState -> PartialRoundState
-partialRound Round{bids=bids,trump=trump,tricks=tricks} = 
-  PartialRound bids trump tricks
+partialGame :: PlayerId -> G.GameState -> GameState
+partialGame pid G.Game{G.scores=scores
+                      ,G.players=players
+                      ,G.rounds=rounds
+                      } = 
+  Game scores (map show players) (map partialRound rounds) hand
+  where hand = cards $ fromMaybe (Hand [] pid) . find ((== pid) . ownerIdx) $ G.hands (head rounds)
 
-partialGame :: GameState -> PartialGameState
-partialGame Game{scores=scores,players=players,rounds=rounds} = 
-  PartialGame scores (map show players) (map partialRound rounds)
-
-wonBid :: Int -> RoundState -> Bool
-wonBid n rs = bidderIdx (maximumBy (comparing amount) (bids rs)) == n
-
-data GameState = Game { players   :: [Player]
-                      , scores    :: [Int]
-                      , rounds    :: [RoundState]
-                      , dealers   :: [(Player, Int)]
-                      , generator :: StdGen
-                      }
+wonBid :: Int -> G.RoundState -> Bool
+wonBid n rs = bidderIdx (maximumBy (comparing amount) (G.bids rs)) == n
                                  
-mkGameState :: StdGen -> [Player] -> GameState
-mkGameState g ps = Game {players = ps
-                        ,scores = map (const 0) ps
-                        ,generator = g
-                        ,rounds = []
-                        ,dealers = cycle $ zip ps [0..]
-                        }
+mkGameState :: StdGen -> [Player] -> G.GameState
+mkGameState g ps = G.Game {G.players = playerList
+                          ,G.scores = map (\(pid,_) -> (pid, 0)) playerList
+                          ,G.generator = g
+                          ,G.rounds = []
+                          ,G.dealers = cycle playerList
+                          }
+  where playerList = zip [1..] ps
 
-lastRound :: GameState -> RoundState
-lastRound = head . rounds
+lastRound :: G.GameState -> G.RoundState
+lastRound = head . G.rounds
 
-type Game =  StateT GameState IO
+checkForWinner :: Pitch (Maybe (PlayerId, Int))
+checkForWinner = do gs@G.Game{G.scores=ss} <- get
+                    if any ((>= 11) . snd) ss
+                      then let overScores = filter ((>= 11) . snd) ss
+                           in return $ find (\(widx, _) -> wonBid widx (lastRound gs)) overScores
+                      else return Nothing
 
-checkForWinner :: Game (Maybe (Player, Int))
-checkForWinner = state (\x -> (check x, x))
-    where check gs = if any (>= 11) $ scores gs
-                     then let scoresAndIndexes = filter ((>= 11) . fst) $ zip (scores gs) [1..]
-                          in do (winnerIdx, score) <- find (\(widx, _) -> wonBid widx (lastRound gs)) scoresAndIndexes
-                                return (players gs !! winnerIdx, score)
-                     else Nothing
-
-validateBidAmount :: Int -> (PartialGameState, [Card]) -> Int -> Maybe String
-validateBidAmount idx gs@(PartialGame scores ps (r@(PartialRound bids trump tricks):rs)
-                         ,hand) x
+validateBidAmount :: PlayerId -> GameState -> Int -> Maybe String
+validateBidAmount pid 
+                  gs@(Game scores ps (r@(Round bids trump tricks):rs) hand)
+                  x
   | x `notElem` [0, 2, 3, 4] = Just "A valid bid is 0 (pass), 2, 3, or 4"
   | x /= 0 && any (>= x) (map amount bids) = Just $ "You need to bid more than " ++ show (maximum $ map amount bids)
   | x == 0 && length bids + 1 == length ps && maximum (map amount bids) == 0 = Just "Since you are the last player to bid and everyone else has passed, you must bid at least 2"
   | otherwise = Nothing
 
-validateBidSuit :: Int -> (PartialGameState, [Card]) -> Int -> Maybe Suit -> Maybe String
+validateBidSuit :: PlayerId  -> GameState -> Int -> Maybe Suit -> Maybe String
 validateBidSuit _ _ x Nothing
   | x /= 0 = Just "You must specify a suit"
   | otherwise = Nothing
-validateBidSuit idx (_, hand) x (Just s) 
+validateBidSuit pid Game{hand=hand} x (Just s) 
   | s `notElem` map suit hand = Just "You don't have any cards of that suit"
   | otherwise = Nothing
 
-validateBid :: Int -> (PartialGameState, [Card]) -> (Int, Maybe Suit) -> Maybe String
-validateBid idx q (x, s) = getFirst $ First (validateBidAmount idx q x) <> First (validateBidSuit idx q x s)
+validateBid :: PlayerId -> GameState -> (Int, Maybe Suit) -> Maybe String
+validateBid pid q (x, s) = getFirst $ First (validateBidAmount pid q x) <> First (validateBidSuit pid q x s)
 
-validateCard :: Int -> (PartialGameState, [Card]) -> Card -> Maybe String
-validateCard idx (PartialGame scoresp ps (PartialRound bids trump (Trick{played=played}:ts):rs)
-                 , hand) c 
+validateCard :: PlayerId -> GameState -> Card -> Maybe String
+validateCard pid 
+             (Game scoresp ps (Round bids trump (Trick{played=played}:ts):rs) hand)
+             c 
   | c `notElem` hand = Just "You don't have that card"
   | null ts && null played && suit c /= trump = Just "You must lead trump"
   | suit c /= trump
@@ -132,30 +122,33 @@ validateCard idx (PartialGame scoresp ps (PartialRound bids trump (Trick{played=
   = Just "You must play trump or follow suit"
   | otherwise = Nothing
 
-doBid :: (Player, Int) -> Game ()
-doBid (Player p, idx) = do g@Game{players=ps,rounds=r@Round{hands=hands}:rs} <- get
-                           let hand = cards . fromJust $ find ((== idx) . ownerIdx) hands
-                           (amount, suit) <- liftIO $ mkBid (p, idx) (partialGame g) hand
-                           g@Game {rounds=r@Round{bids=bs}:rs} <- get
-                           let newBid = Bid amount suit idx
-                           put g{rounds=r{bids=newBid:bs}:rs}
-                           liftIO $ forM_ (zip ps [0..]) (\(Player p, x) -> postBidHook (p, x) newBid (partialGame g{rounds=r{bids=newBid:bs}:rs}) (cards . fromJust $ find ((== x) .ownerIdx) hands))
-                           return ()
+doBid :: (PlayerId, Player) -> Pitch ()
+doBid (pid, p) = do g@G.Game{G.players=ps
+                            ,G.rounds=r@G.Round{G.hands=hands
+                                               ,G.bids=bs
+                                               }:rs
+                            } <- get
+                    (amount, suit) <- liftIO $ (mkBid p) pid $ partialGame pid g
+                    let newBid = Bid amount suit pid
+                        newState = g{G.rounds=r{G.bids=newBid:bs}:rs}
+                    put newState
+                    liftIO $ forM_ ps (\(pid, p) -> (postBidHook p) pid newBid $ partialGame pid newState)
 
-doPlay :: (Player, Int) -> Game ()
-doPlay (Player p, idx) = do g@Game{players=ps,rounds=r@Round{hands=hands}:rs} <- get
-                            let hand = cards . fromJust $ find ((== idx) . ownerIdx) hands
-                            card <- liftIO $ mkPlay (p, idx) (partialGame g) hand
-                            g@Game {rounds=r@Round{tricks=t@Trick{played=played}:ts,hands=hands}:rs} <- get
-                            let newPlay = Play card idx
-                            let newGS = g{rounds=r{tricks=t{played=newPlay:played}:ts
-                                                  ,hands=removeCard card hands
-                                                  }:rs}
-                            put newGS
-                            liftIO $ forM_ (zip ps [0..]) (\(Player p, x) -> postPlayHook (p, x) newPlay (partialGame newGS) (cards . fromJust $ find ((== x) .ownerIdx) hands))
-                            return ()
+doPlay :: (PlayerId, Player) -> Pitch ()
+doPlay (pid, p) = do g@G.Game{G.players=ps
+                             ,G.rounds=r@G.Round{G.hands=hands
+                                                ,G.tricks=t@Trick{played=played}:ts}:rs
+                             } <- get
+                     card <- liftIO $ (mkPlay p) pid $ partialGame pid g
+                     let newPlay = Play card pid
+                         newGS = g{G.rounds=r{G.tricks=t{played=newPlay:played}:ts
+                                             ,G.hands=removeCard card hands
+                                             }:rs
+                                  }
+                     put newGS
+                     liftIO $ forM_ ps (\(pid, p) -> (postPlayHook p)  pid newPlay $ partialGame pid newGS)
   where removeCard c [] = []
-        removeCard c (h@Hand{cards=cs,ownerIdx=i}:hs) | i == idx = h{cards=delete c cs}:hs
+        removeCard c (h@Hand{cards=cs,ownerIdx=i}:hs) | i == pid = h{cards=delete c cs}:hs
                                                       | otherwise = h:removeCard c hs
 
 trickWinner :: Suit -> Trick -> Trick
@@ -169,9 +162,9 @@ trickWinner trump trick@(Trick plays winner)
                                       else filter ((== suit firstPlayed) . suit . card) plays
                    in Trick plays idx
 
-tallyScore :: Suit -> [Trick] -> (Player, Int) -> (Int, Int)
-tallyScore trump tricks (p, idx) = 
-    let tricksWon = filter ((== idx) . winnerIdx) tricks
+tallyScore :: Suit -> [Trick] -> (PlayerId, Player) -> (PlayerId, (Int, Int))
+tallyScore trump tricks (pid, _) = 
+    let tricksWon = filter ((== pid) . winnerIdx) tricks
         cardsWon = map card $ concatMap played tricksWon
         trumpWon = filter ((== trump) . suit) cardsWon
         allCards = map card $ concatMap played tricks
@@ -188,7 +181,7 @@ tallyScore trump tricks (p, idx) =
              then 1
              else 0 
         game = sum $ map gamePoints cardsWon
-    in (hi + lo + jack, game)
+    in (pid, (hi + lo + jack, game))
 
 gamePoints :: Card -> Int
 gamePoints (Card r _) = rankToGame r
@@ -199,55 +192,71 @@ gamePoints (Card r _) = rankToGame r
           rankToGame (Number 10) = 10
           rankToGame _ = 0
 
-playTrick :: Game Trick
-playTrick = do g@Game {rounds=r@Round{bids=bids, tricks=ts}:rs, dealers=ds, players=ps} <- get
+playTrick :: Pitch Trick
+playTrick = do g@G.Game {G.rounds=r@G.Round{G.bids=bids
+                                           ,G.tricks=ts
+                                           }:rs
+                        ,G.dealers=ds
+                        ,G.players=ps
+                        } <- get
                let startingPlayerIdx = if null ts
                                        then bidderIdx $ maximumBy (comparing amount) bids
                                        else winnerIdx $ head ts
-               put g{rounds=r{tricks=newTrick:ts}:rs}
-               let playOrder = take (length ps) $ dropWhile ((/= startingPlayerIdx) . snd) ds
+               put g{G.rounds=r{G.tricks=newTrick:ts}:rs}
+               let playOrder = take (length ps) $ dropWhile ((/= startingPlayerIdx) . fst) (cycle ps)
                forM_ playOrder doPlay
-               g@Game {rounds=r@Round{tricks=t:ts, trump=trump}:rs} <- get
+               g@G.Game {G.rounds=r@G.Round{G.tricks=t:ts
+                                           ,G.trump=trump
+                                           }:rs
+                        } <- get
                let t' = trickWinner trump t
-               put g{rounds=r{tricks=t':ts}:rs}
+               put g{G.rounds=r{G.tricks=t':ts}:rs}
                return t'
 
-playRound :: Game ()
+playRound :: Pitch ()
 playRound = do  liftIO $ putStrLn "playing a round"
-                g@Game {players=ps
-                       ,generator=gtr
-                       ,rounds=rs
-                       ,dealers=ds
-                       ,scores=ss
-                       } <- get
-                let (r, gtr') = mkRoundState gtr (length ps)
-                let playersWithIndex = zip ps [0..]
-                liftIO $ forM_ playersWithIndex (\(Player p, idx) -> initGameState (p, idx) (partialGame g{rounds=r:rs}) (cards . fromJust $ find ((== idx) . ownerIdx) (hands r)))
-                put g{generator=gtr', rounds=r:rs}
+                g@G.Game {G.players=ps
+                         ,G.generator=gtr
+                         ,G.rounds=rs
+                         ,G.dealers=ds
+                         ,G.scores=ss
+                         } <- get
+                lift $ print g
+                let (r, gtr') = mkRoundState gtr (map fst ps)
+                    newState = g{G.rounds=r:rs
+                                ,G.generator=gtr'
+                                }
+                lift $ print newState
+                liftIO $ forM_ ps (\(pid, p) -> (initGameState p) pid $ partialGame pid newState)
+                put newState
                 forM_ (take (length ps) ds) doBid
-                g@Game {dealers=d:ds, rounds=r@Round{bids=bids}:rs} <- get
+                g@G.Game {G.dealers=d:ds
+                         ,G.rounds=r@G.Round{G.bids=bids}:rs
+                         } <- get
                 let maxBid = maximumBy (comparing amount) bids
-                let trump = fromJust $ bidSuit maxBid
-                put g{dealers=ds, rounds=r{trump=trump}:rs}
-                let bidder = ps !! bidderIdx maxBid
-                liftIO $ forM_ playersWithIndex (\(Player p, idx) -> acknowledgeTrump (p, idx) maxBid (partialGame g) (cards . fromJust $ find ((== idx) . ownerIdx) (hands r)))
+                    trump = fromJust $ bidSuit maxBid
+                put g{G.dealers=ds
+                     ,G.rounds=r{G.trump=trump}:rs
+                     }
+                liftIO $ forM_ ps (\(pid, p) -> (acknowledgeTrump p) pid maxBid $ partialGame pid g)
                 tricks <- forM [1 .. 6] (const playTrick)
-                let roundTalliesAndGame = map (tallyScore trump tricks) playersWithIndex
-                let roundTallies = map (\(pts, game) -> if game == maximum (map snd roundTalliesAndGame)
-                                                        then pts + 1
-                                                        else pts) roundTalliesAndGame
-                let roundScores = mapWithIndex (\(idx, score) -> if idx /= bidderIdx maxBid
-                                                                    || roundTallies !! idx >= amount maxBid
-                                                                 then score
-                                                                 else (-1 * amount maxBid))
-                                               roundTallies
-                let newScores = zipWith (+) roundScores ss
+                let roundTalliesAndGame = map (tallyScore trump tricks) ps
+                    roundTallies = map (\(pid, (pts, game)) -> if game == maximum (map (snd . snd) roundTalliesAndGame)
+                                                               then (pid, pts + 1)
+                                                               else (pid, pts)) 
+                                       roundTalliesAndGame
+                    roundScores = map (\(pid, score) -> if pid /= bidderIdx maxBid
+                                                           || score >= amount maxBid
+                                                        then score
+                                                        else (-1 * amount maxBid))
+                                      roundTallies
+                    newScores = zipWith (\(pid, s1) s2 -> (pid, s1 + s2)) ss roundScores
                 liftIO . putStr $ "Scores: " ++ show newScores
                 g <- get
-                put g{scores=newScores}                              
+                put g{G.scores=newScores}                              
                 return ()
 
-playGame :: Game (Player, Int)
+playGame :: Pitch (PlayerId, Int)
 playGame = do playRound
               maybeWinner <- checkForWinner
               let winnerSt = case maybeWinner of
@@ -257,35 +266,6 @@ playGame = do playRound
               liftIO $ putStrLn "we have a winner"
               liftIO $ print score
               winnerSt
-
-class (Show p) => PlayerLogic p where
-    initGameState :: (p, Int) -> PartialGameState -> [Card] -> IO ()
-    initGameState _ _ _ = return ()
-
-    --  The result of the state is the bid and the suit that the player will choose
-    -- if they win the bid
-    mkBid :: (p, Int) -> PartialGameState -> [Card] -> IO (Int, Maybe Suit)
-
-    mkPlay :: (p, Int) -> PartialGameState -> [Card] -> IO Card
-    
-    -- post*Hooks will be called on each player after any player takes some action
-    -- The default implementation is just to do nothing
-    postBidHook :: (p, Int) -> Bid -> PartialGameState -> [Card] -> IO ()
-    postBidHook _ _ _ _ = return () 
-    
-    postPlayHook :: (p, Int) -> Play -> PartialGameState -> [Card] -> IO ()
-    postPlayHook _ _ _ _= return ()
-
-    -- called on each player after trump has been decided
-    acknowledgeTrump :: (p, Int) -> Bid -> PartialGameState -> [Card] -> IO ()
-    acknowledgeTrump _ _ _ _ = return ()
-    
-    
-
-data Player = forall p. (PlayerLogic p) => Player {getLogic :: p}
-
-instance Show Player where
-    show (Player p) = show p
 
 
 

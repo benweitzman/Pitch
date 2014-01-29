@@ -16,6 +16,6 @@ main = do
   (netPlayer1, g') <- mkNetworkPlayer gen "net1"
   (netPlayer2, g'') <- mkNetworkPlayer g' "net2"
   (netPlayer3, g''') <- mkNetworkPlayer g'' "net3" 
-  let gameState = mkGameState g''' [Player (Human "John"), Player netPlayer1, Player netPlayer2, Player netPlayer3]
+  let gameState = mkGameState g''' [mkPlayer  "John", netPlayer1, netPlayer2, netPlayer3]
   runStateT playGame gameState
   
